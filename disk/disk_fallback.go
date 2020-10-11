@@ -1,4 +1,4 @@
-// +build !darwin,!linux,!freebsd,!openbsd,!windows,!solaris
+// +build !darwin,!linux,!freebsd,!openbsd,!windows,!solaris ios
 
 package disk
 
