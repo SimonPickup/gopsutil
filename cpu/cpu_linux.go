@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sjpickup/gopsutil/internal/common"
+	"github.com/shirou/gopsutil/internal/common"
 )
 
 var ClocksPerSec = float64(100)

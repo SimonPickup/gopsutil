@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/sjpickup/gopsutil/internal/common"
+	"github.com/shirou/gopsutil/internal/common"
 	"golang.org/x/sys/unix"
 )
 

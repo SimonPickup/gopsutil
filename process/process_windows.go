@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"unsafe"
 
-	cpu "github.com/sjpickup/gopsutil/cpu"
-	"github.com/sjpickup/gopsutil/internal/common"
-	net "github.com/sjpickup/gopsutil/net"
+	cpu "github.com/shirou/gopsutil/cpu"
+	"github.com/shirou/gopsutil/internal/common"
+	net "github.com/shirou/gopsutil/net"
 	"golang.org/x/sys/windows"
 )
 

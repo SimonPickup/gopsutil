@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sjpickup/gopsutil/internal/common"
+	"github.com/shirou/gopsutil/internal/common"
 )
 
 func TestSleep(test *testing.T) {

@@ -15,7 +15,7 @@ import "C"
 import (
 	"context"
 
-	"github.com/sjpickup/gopsutil/internal/common"
+	"github.com/shirou/gopsutil/internal/common"
 )
 
 func IOCounters(names ...string) (map[string]IOCountersStat, error) {
