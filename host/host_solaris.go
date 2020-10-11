@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/shirou/gopsutil/internal/common"
+	"github.com/sjpickup/gopsutil/internal/common"
 )
 
 func HostIDWithContext(ctx context.Context) (string, error) {

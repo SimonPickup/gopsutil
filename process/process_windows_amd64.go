@@ -6,7 +6,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/shirou/gopsutil/internal/common"
+	"github.com/sjpickup/gopsutil/internal/common"
 )
 
 type PROCESS_MEMORY_COUNTERS struct {
