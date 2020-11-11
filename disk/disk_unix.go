@@ -1,5 +1,4 @@
-// +build freebsd linux darwin
-// +build !ios
+// +build freebsd linux darwin ios
 
 package disk
 
