@@ -3,6 +3,7 @@ package host
 import (
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/shirou/gopsutil/internal/common"
@@ -91,13 +92,13 @@ func TestUsers(t *testing.T) {
 
 func TestHostInfoStat_String(t *testing.T) {
 	v := InfoStat{
-		Hostname: "test",
-		Uptime:   3000,
-		Procs:    100,
-		OS:       "linux",
-		Platform: "ubuntu",
-		BootTime: 1447040000,
-		HostID:   "edfd25ff-3c9c-b1a4-e660-bd826495ad35",
+		Hostname:   "test",
+		Uptime:     3000,
+		Procs:      100,
+		OS:         "linux",
+		Platform:   "ubuntu",
+		BootTime:   1447040000,
+		HostID:     "edfd25ff-3c9c-b1a4-e660-bd826495ad35",
 		KernelArch: "x86_64",
 	}
 	e := `{"hostname":"test","uptime":3000,"bootTime":1447040000,"procs":100,"os":"linux","platform":"ubuntu","platformFamily":"","platformVersion":"","kernelVersion":"","kernelArch":"x86_64","virtualizationSystem":"","virtualizationRole":"","hostid":"edfd25ff-3c9c-b1a4-e660-bd826495ad35"}`
@@ -120,15 +121,15 @@ func TestUserStat_String(t *testing.T) {
 }
 
 func TestHostGuid(t *testing.T) {
-	hi, err := Info()
+	id, err := HostID()
 	skipIfNotImplementedErr(t, err)
 	if err != nil {
 		t.Error(err)
 	}
-	if hi.HostID == "" {
+	if id == "" {
 		t.Error("Host id is empty")
 	} else {
-		t.Logf("Host id value: %v", hi.HostID)
+		t.Logf("Host id value: %v", id)
 	}
 }
 
@@ -144,13 +145,24 @@ func TestTemperatureStat_String(t *testing.T) {
 }
 
 func TestVirtualization(t *testing.T) {
-	system, role, err := Virtualization()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("Virtualization() failed, %v", err)
-	}
+	wg := sync.WaitGroup{}
+	testCount := 10
+	wg.Add(testCount)
+	for i := 0; i < testCount; i++ {
+		go func(j int) {
+			system, role, err := Virtualization()
+			wg.Done()
+			skipIfNotImplementedErr(t, err)
+			if err != nil {
+				t.Errorf("Virtualization() failed, %v", err)
+			}
 
-	t.Logf("Virtualization(): %s, %s", system, role)
+			if j == 9 {
+				t.Logf("Virtualization(): %s, %s", system, role)
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 func TestKernelVersion(t *testing.T) {
