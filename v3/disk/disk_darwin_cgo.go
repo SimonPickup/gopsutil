@@ -1,4 +1,5 @@
 // +build darwin
+// +build !ios
 // +build cgo
 
 package disk
