@@ -312,6 +312,52 @@ func Test_Process_Name(t *testing.T) {
 		t.Errorf("invalid Exe %s", n)
 	}
 }
+
+func Test_Process_Long_Name_With_Spaces(t *testing.T) {
+	tmpdir, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatalf("unable to create temp dir %v", err)
+	}
+	defer os.RemoveAll(tmpdir) // clean up
+	tmpfilepath := filepath.Join(tmpdir, "loooong name with spaces.go")
+	tmpfile, err := os.Create(tmpfilepath)
+	if err != nil {
+		t.Fatalf("unable to create temp file %v", err)
+	}
+
+	tmpfilecontent := []byte("package main\nimport(\n\"time\"\n)\nfunc main(){\nfor range time.Tick(time.Second) {}\n}")
+	if _, err := tmpfile.Write(tmpfilecontent); err != nil {
+		tmpfile.Close()
+		t.Fatalf("unable to write temp file %v", err)
+	}
+	if err := tmpfile.Close(); err != nil {
+		t.Fatalf("unable to close temp file %v", err)
+	}
+
+	err = exec.Command("go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
+	if err != nil {
+		t.Fatalf("unable to build temp file %v", err)
+	}
+
+	cmd := exec.Command(tmpfile.Name() + ".exe")
+
+	assert.Nil(t, cmd.Start())
+	time.Sleep(100 * time.Millisecond)
+	p, err := NewProcess(int32(cmd.Process.Pid))
+	skipIfNotImplementedErr(t, err)
+	assert.Nil(t, err)
+
+	n, err := p.Name()
+	skipIfNotImplementedErr(t, err)
+	if err != nil {
+		t.Fatalf("getting name error %v", err)
+	}
+	basename := filepath.Base(tmpfile.Name() + ".exe")
+	if basename != n {
+		t.Fatalf("%s != %s", basename, n)
+	}
+	cmd.Process.Kill()
+}
 func Test_Process_Long_Name(t *testing.T) {
 	tmpdir, err := ioutil.TempDir("", "")
 	if err != nil {
@@ -372,14 +418,14 @@ func Test_Process_Exe(t *testing.T) {
 
 func Test_Process_CpuPercent(t *testing.T) {
 	p := testGetProcess()
-	percent, err := p.Percent(0)
+	_, err := p.Percent(0)
 	skipIfNotImplementedErr(t, err)
 	if err != nil {
 		t.Errorf("error %v", err)
 	}
 	duration := time.Duration(1000) * time.Microsecond
 	time.Sleep(duration)
-	percent, err = p.Percent(0)
+	percent, err := p.Percent(0)
 	if err != nil {
 		t.Errorf("error %v", err)
 	}
@@ -452,55 +498,84 @@ func Test_Parent(t *testing.T) {
 
 func Test_Connections(t *testing.T) {
 	p := testGetProcess()
-	ch0 := make(chan string)
-	ch1 := make(chan string)
-	go func() { // TCP listening goroutine
-		addr, err := net.ResolveTCPAddr("tcp", "localhost:0") // dynamically get a random open port from OS
-		if err != nil {
-			t.Skip("unable to resolve localhost:", err)
-		}
-		l, err := net.ListenTCP(addr.Network(), addr)
-		if err != nil {
-			t.Skip(fmt.Sprintf("unable to listen on %v: %v", addr, err))
-		}
-		defer l.Close()
-		ch0 <- l.Addr().String()
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				t.Skip("unable to accept connection:", err)
-			}
-			ch1 <- l.Addr().String()
-			defer conn.Close()
-		}
-	}()
-	go func() { // TCP client goroutine
-		tcpServerAddr := <-ch0
-		net.Dial("tcp", tcpServerAddr)
-	}()
 
-	tcpServerAddr := <-ch1
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0") // dynamically get a random open port from OS
+	if err != nil {
+		t.Fatalf("unable to resolve localhost: %v", err)
+	}
+	l, err := net.ListenTCP(addr.Network(), addr)
+	if err != nil {
+		t.Fatalf("unable to listen on %v: %v", addr, err)
+	}
+	defer l.Close()
+
+	tcpServerAddr := l.Addr().String()
 	tcpServerAddrIP := strings.Split(tcpServerAddr, ":")[0]
 	tcpServerAddrPort, err := strconv.ParseUint(strings.Split(tcpServerAddr, ":")[1], 10, 32)
 	if err != nil {
-		t.Errorf("unable to parse tcpServerAddr port: %v", err)
+		t.Fatalf("unable to parse tcpServerAddr port: %v", err)
 	}
+
+	serverEstablished := make(chan struct{})
+	go func() { // TCP listening goroutine
+		conn, err := l.Accept()
+		if err != nil {
+			panic(err)
+		}
+		defer conn.Close()
+
+		serverEstablished <- struct{}{}
+		_, err = ioutil.ReadAll(conn)
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	conn, err := net.Dial("tcp", tcpServerAddr)
+	if err != nil {
+		t.Fatalf("unable to dial %v: %v", tcpServerAddr, err)
+	}
+	defer conn.Close()
+
+	// Rarely the call to net.Dial returns before the server connection is
+	// established. Wait so that the test doesn't fail.
+	<-serverEstablished
+
 	c, err := p.Connections()
 	skipIfNotImplementedErr(t, err)
 	if err != nil {
-		t.Errorf("error %v", err)
+		t.Fatalf("error %v", err)
 	}
 	if len(c) == 0 {
-		t.Errorf("no connections found")
+		t.Fatal("no connections found")
 	}
-	found := 0
+
+	serverConnections := 0
 	for _, connection := range c {
-		if connection.Status == "ESTABLISHED" && (connection.Laddr.IP == tcpServerAddrIP && connection.Laddr.Port == uint32(tcpServerAddrPort)) || (connection.Raddr.IP == tcpServerAddrIP && connection.Raddr.Port == uint32(tcpServerAddrPort)) {
-			found++
+		if connection.Laddr.IP == tcpServerAddrIP && connection.Laddr.Port == uint32(tcpServerAddrPort) && connection.Raddr.Port != 0 {
+			if connection.Status != "ESTABLISHED" {
+				t.Fatalf("expected server connection to be ESTABLISHED, have %+v", connection)
+			}
+			serverConnections++
 		}
 	}
-	if found != 2 { // two established connections, one for the server, the other for the client
-		t.Errorf(fmt.Sprintf("wrong connections: %+v", c))
+
+	clientConnections := 0
+	for _, connection := range c {
+		if connection.Raddr.IP == tcpServerAddrIP && connection.Raddr.Port == uint32(tcpServerAddrPort) {
+			if connection.Status != "ESTABLISHED" {
+				t.Fatalf("expected client connection to be ESTABLISHED, have %+v", connection)
+			}
+			clientConnections++
+		}
+	}
+
+	if serverConnections != 1 { // two established connections, one for the server, the other for the client
+		t.Fatalf("expected 1 server connection, have %d.\nDetails: %+v", serverConnections, c)
+	}
+
+	if clientConnections != 1 { // two established connections, one for the server, the other for the client
+		t.Fatalf("expected 1 server connection, have %d.\nDetails: %+v", clientConnections, c)
 	}
 }
 
@@ -645,21 +720,94 @@ func Test_IsRunning(t *testing.T) {
 	}
 }
 
+func Test_Process_Environ(t *testing.T) {
+	tmpdir, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatalf("unable to create temp dir %v", err)
+	}
+	defer os.RemoveAll(tmpdir) // clean up
+	tmpfilepath := filepath.Join(tmpdir, "test.go")
+	tmpfile, err := os.Create(tmpfilepath)
+	if err != nil {
+		t.Fatalf("unable to create temp file %v", err)
+	}
+
+	tmpfilecontent := []byte("package main\nimport(\n\"time\"\n)\nfunc main(){\nfor range time.Tick(time.Second) {}\n}")
+	if _, err := tmpfile.Write(tmpfilecontent); err != nil {
+		tmpfile.Close()
+		t.Fatalf("unable to write temp file %v", err)
+	}
+	if err := tmpfile.Close(); err != nil {
+		t.Fatalf("unable to close temp file %v", err)
+	}
+
+	err = exec.Command("go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
+	if err != nil {
+		t.Fatalf("unable to build temp file %v", err)
+	}
+
+	cmd := exec.Command(tmpfile.Name() + ".exe")
+
+	cmd.Env = []string{"testkey=envvalue"}
+
+	assert.Nil(t, cmd.Start())
+	defer cmd.Process.Kill()
+	time.Sleep(100 * time.Millisecond)
+	p, err := NewProcess(int32(cmd.Process.Pid))
+	skipIfNotImplementedErr(t, err)
+	assert.Nil(t, err)
+
+	envs, err := p.Environ()
+	skipIfNotImplementedErr(t, err)
+	if err != nil {
+		t.Errorf("getting environ error %v", err)
+	}
+	var envvarFound bool
+	for _, envvar := range envs {
+		if envvar == "testkey=envvalue" {
+			envvarFound = true
+			break
+		}
+	}
+	if !envvarFound {
+		t.Error("environment variable not found")
+	}
+}
+
 func Test_AllProcesses_cmdLine(t *testing.T) {
 	procs, err := Processes()
-	if err == nil {
-		for _, proc := range procs {
-			var exeName string
-			var cmdLine string
+	skipIfNotImplementedErr(t, err)
+	if err != nil {
+		t.Fatalf("getting processes error %v", err)
+	}
+	for _, proc := range procs {
+		var exeName string
+		var cmdLine string
 
-			exeName, _ = proc.Exe()
-			cmdLine, err = proc.Cmdline()
-			if err != nil {
-				cmdLine = "Error: " + err.Error()
-			}
-
-			t.Logf("Process #%v: Name: %v / CmdLine: %v\n", proc.Pid, exeName, cmdLine)
+		exeName, _ = proc.Exe()
+		cmdLine, err = proc.Cmdline()
+		if err != nil {
+			cmdLine = "Error: " + err.Error()
 		}
+
+		t.Logf("Process #%v: Name: %v / CmdLine: %v\n", proc.Pid, exeName, cmdLine)
+	}
+}
+
+func Test_AllProcesses_environ(t *testing.T) {
+	procs, err := Processes()
+	skipIfNotImplementedErr(t, err)
+	if err != nil {
+		t.Fatalf("getting processes error %v", err)
+	}
+	for _, proc := range procs {
+		exeName, _ := proc.Exe()
+		environ, err := proc.Environ()
+		if err != nil {
+			environ = []string{"Error: " + err.Error()}
+		}
+
+		t.Logf("Process #%v: Name: %v / Environment Variables: %v\n", proc.Pid, exeName, environ)
 	}
 }
 

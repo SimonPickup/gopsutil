@@ -48,8 +48,24 @@
   version = "v1.6.0"
 
 [[projects]]
+  digest = "1:dc2f804edbbcc4e7c5385791b8703da9b6bc6e22e698233f919c19da6286cf11"
+  name = "github.com/tklauser/go-sysconf"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "18f67506ef17458385cd85f6f7678623087ba043"
+  version = "v0.3.9"
+
+[[projects]]
+  digest = "1:40a9f481f2c76a04fb1a0c083e317907875cd6405e96117f2aa81fd17aa28000"
+  name = "github.com/tklauser/numcpus"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "ce6ed4c574066004ab884122d989748388233cad"
+  version = "v0.3.0"
+
+[[projects]]
   branch = "master"
-  digest = "1:0afe79d034c63eea8c5977401f5fc135394751c1213ee6c991b0c6bec44f8f60"
+  digest = "1:1672d2eb5799465379f6016fa509eadd72c69e3eb2bf3cdfea9222e64e163b94"
   name = "golang.org/x/sys"
   packages = [
     "internal/unsafeheader",
@@ -59,7 +75,7 @@
     "windows/svc/mgr",
   ]
   pruneopts = "UT"
-  revision = "e3ed0017c21142d3345308d92dcc7ad7020040c6"
+  revision = "134d130e1a049f4194ae9920ac9f96455cde360d"
 
 [[projects]]
   branch = "v3"
@@ -76,6 +92,7 @@
     "github.com/StackExchange/wmi",
     "github.com/stretchr/testify/assert",
     "github.com/stretchr/testify/require",
+    "github.com/tklauser/go-sysconf",
     "golang.org/x/sys/unix",
     "golang.org/x/sys/windows",
     "golang.org/x/sys/windows/svc",
