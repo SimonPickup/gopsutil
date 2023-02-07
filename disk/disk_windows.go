@@ -1,3 +1,4 @@
+//go:build windows
 // +build windows
 
 package disk
@@ -9,9 +10,12 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/shirou/gopsutil/internal/common"
+	"github.com/shirou/gopsutil/v3/internal/common"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
+
+type Warnings = common.Warnings
 
 var (
 	procGetDiskFreeSpaceExW     = common.Modkernel32.NewProc("GetDiskFreeSpaceExW")
@@ -21,8 +25,8 @@ var (
 )
 
 var (
-	FileFileCompression = int64(16)     // 0x00000010
-	FileReadOnlyVolume  = int64(524288) // 0x00080000
+	fileFileCompression = int64(16)     // 0x00000010
+	fileReadOnlyVolume  = int64(524288) // 0x00080000
 )
 
 // diskPerformance is an equivalent representation of DISK_PERFORMANCE in the Windows API.
@@ -41,6 +45,14 @@ type diskPerformance struct {
 	StorageDeviceNumber uint32
 	StorageManagerName  [8]uint16
 	alignmentPadding    uint32 // necessary for 32bit support, see https://github.com/elastic/beats/pull/16553
+}
+
+func init() {
+	// enable disk performance counters on Windows Server editions (needs to run as admin)
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\PartMgr`, registry.SET_VALUE)
+	if err == nil {
+		key.SetDWordValue("EnableCounterForIoctl", 1)
+	}
 }
 
 func UsageWithContext(ctx context.Context, path string) (*UsageStat, error) {
@@ -70,6 +82,9 @@ func UsageWithContext(ctx context.Context, path string) (*UsageStat, error) {
 }
 
 func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, error) {
+	warnings := Warnings{
+		Verbose: true,
+	}
 	var ret []PartitionStat
 	lpBuffer := make([]byte, 254)
 	diskret, _, err := procGetLogicalDriveStringsW.Call(
@@ -84,7 +99,9 @@ func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, erro
 			typepath, _ := windows.UTF16PtrFromString(path)
 			typeret, _, _ := procGetDriveType.Call(uintptr(unsafe.Pointer(typepath)))
 			if typeret == 0 {
-				return ret, windows.GetLastError()
+				err := windows.GetLastError()
+				warnings.Add(err)
+				continue
 			}
 			// 2: DRIVE_REMOVABLE 3: DRIVE_FIXED 4: DRIVE_REMOTE 5: DRIVE_CDROM
 
@@ -106,16 +123,17 @@ func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, erro
 					uintptr(len(lpFileSystemNameBuffer)))
 				if driveret == 0 {
 					if typeret == 5 || typeret == 2 {
-						continue //device is not ready will happen if there is no disk in the drive
+						continue // device is not ready will happen if there is no disk in the drive
 					}
-					return ret, err
+					warnings.Add(err)
+					continue
 				}
-				opts := "rw"
-				if lpFileSystemFlags&FileReadOnlyVolume != 0 {
-					opts = "ro"
+				opts := []string{"rw"}
+				if lpFileSystemFlags&fileReadOnlyVolume != 0 {
+					opts = []string{"ro"}
 				}
-				if lpFileSystemFlags&FileFileCompression != 0 {
-					opts += ".compress"
+				if lpFileSystemFlags&fileFileCompression != 0 {
+					opts = append(opts, "compress")
 				}
 
 				d := PartitionStat{
@@ -128,7 +146,7 @@ func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, erro
 			}
 		}
 	}
-	return ret, nil
+	return ret, warnings.Reference()
 }
 
 func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOCountersStat, error) {
@@ -180,4 +198,12 @@ func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOC
 		}
 	}
 	return drivemap, nil
+}
+
+func SerialNumberWithContext(ctx context.Context, name string) (string, error) {
+	return "", common.ErrNotImplementedError
+}
+
+func LabelWithContext(ctx context.Context, name string) (string, error) {
+	return "", common.ErrNotImplementedError
 }

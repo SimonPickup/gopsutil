@@ -1,17 +1,17 @@
 package net
 
 import (
+	"errors"
 	"fmt"
-	"math"
 	"os"
 	"runtime"
 	"testing"
 
-	"github.com/shirou/gopsutil/internal/common"
+	"github.com/shirou/gopsutil/v3/internal/common"
 )
 
 func skipIfNotImplementedErr(t *testing.T, err error) {
-	if err == common.ErrNotImplementedError {
+	if errors.Is(err, common.ErrNotImplementedError) {
 		t.Skip("not implemented")
 	}
 }
@@ -20,7 +20,7 @@ func TestAddrString(t *testing.T) {
 	v := Addr{IP: "192.168.0.1", Port: 8000}
 
 	s := fmt.Sprintf("%v", v)
-	if s != "{\"ip\":\"192.168.0.1\",\"port\":8000}" {
+	if s != `{"ip":"192.168.0.1","port":8000}` {
 		t.Errorf("Addr string is invalid: %v", v)
 	}
 }
@@ -49,7 +49,6 @@ func TestNetProtoCountersStatString(t *testing.T) {
 	if e != fmt.Sprintf("%v", v) {
 		t.Errorf("NetProtoCountersStat string is invalid: %v", v)
 	}
-
 }
 
 func TestNetConnectionStatString(t *testing.T) {
@@ -63,7 +62,6 @@ func TestNetConnectionStatString(t *testing.T) {
 	if e != fmt.Sprintf("%v", v) {
 		t.Errorf("NetConnectionStat string is invalid: %v", v)
 	}
-
 }
 
 func TestNetIOCountersAll(t *testing.T) {
@@ -87,8 +85,14 @@ func TestNetIOCountersAll(t *testing.T) {
 	for _, p := range per {
 		pr += p.PacketsRecv
 	}
-	// small diff is ok
-	if math.Abs(float64(v[0].PacketsRecv-pr)) > 5 {
+	// small diff is ok, compare instead of math.Abs(subtraction) with uint64
+	var diff uint64
+	if v[0].PacketsRecv > pr {
+		diff = v[0].PacketsRecv - pr
+	} else {
+		diff = pr - v[0].PacketsRecv
+	}
+	if diff > 5 {
 		if ci := os.Getenv("CI"); ci != "" {
 			// This test often fails in CI. so just print even if failed.
 			fmt.Printf("invalid sum value: %v, %v", v[0].PacketsRecv, pr)
@@ -222,7 +226,6 @@ func TestNetConnections(t *testing.T) {
 			t.Errorf("invalid NetConnections: %v", vv)
 		}
 	}
-
 }
 
 func TestNetFilterCounters(t *testing.T) {
@@ -232,7 +235,7 @@ func TestNetFilterCounters(t *testing.T) {
 
 	if runtime.GOOS == "linux" {
 		// some test environment has not the path.
-		if !common.PathExists("/proc/sys/net/netfilter/nf_conntrackCount") {
+		if !common.PathExists("/proc/sys/net/netfilter/nf_connTrackCount") {
 			t.SkipNow()
 		}
 	}
@@ -247,8 +250,29 @@ func TestNetFilterCounters(t *testing.T) {
 	}
 	for _, vv := range v {
 		if vv.ConnTrackMax == 0 {
-			t.Errorf("nf_conntrackMax needs to be greater than zero: %v", vv)
+			t.Errorf("nf_connTrackMax needs to be greater than zero: %v", vv)
 		}
 	}
+}
 
+func TestInterfaceStatString(t *testing.T) {
+	v := InterfaceStat{
+		Index:        0,
+		MTU:          1500,
+		Name:         "eth0",
+		HardwareAddr: "01:23:45:67:89:ab",
+		Flags:        []string{"up", "down"},
+		Addrs:        InterfaceAddrList{{Addr: "1.2.3.4"}, {Addr: "5.6.7.8"}},
+	}
+
+	s := fmt.Sprintf("%v", v)
+	if s != `{"index":0,"mtu":1500,"name":"eth0","hardwareAddr":"01:23:45:67:89:ab","flags":["up","down"],"addrs":[{"addr":"1.2.3.4"},{"addr":"5.6.7.8"}]}` {
+		t.Errorf("InterfaceStat string is invalid: %v", s)
+	}
+
+	list := InterfaceStatList{v, v}
+	s = fmt.Sprintf("%v", list)
+	if s != `[{"index":0,"mtu":1500,"name":"eth0","hardwareAddr":"01:23:45:67:89:ab","flags":["up","down"],"addrs":[{"addr":"1.2.3.4"},{"addr":"5.6.7.8"}]},{"index":0,"mtu":1500,"name":"eth0","hardwareAddr":"01:23:45:67:89:ab","flags":["up","down"],"addrs":[{"addr":"1.2.3.4"},{"addr":"5.6.7.8"}]}]` {
+		t.Errorf("InterfaceStatList string is invalid: %v", s)
+	}
 }

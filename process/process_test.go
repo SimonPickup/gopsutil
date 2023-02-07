@@ -1,6 +1,7 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -16,14 +17,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shirou/gopsutil/internal/common"
+	"github.com/shirou/gopsutil/v3/internal/common"
 	"github.com/stretchr/testify/assert"
 )
 
 var mu sync.Mutex
 
 func skipIfNotImplementedErr(t *testing.T, err error) {
-	if err == common.ErrNotImplementedError {
+	if errors.Is(err, common.ErrNotImplementedError) {
 		t.Skip("not implemented")
 	}
 }
@@ -45,25 +46,6 @@ func Test_Pids(t *testing.T) {
 	}
 }
 
-func Test_Pids_Fail(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("darwin only")
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	invoke = common.FakeInvoke{Suffix: "fail"}
-	ret, err := Pids()
-	skipIfNotImplementedErr(t, err)
-	invoke = common.Invoke{}
-	if err != nil {
-		t.Errorf("error %v", err)
-	}
-	if len(ret) != 9 {
-		t.Errorf("wrong getted pid nums: %v/%d", ret, len(ret))
-	}
-}
 func Test_Pid_exists(t *testing.T) {
 	checkPid := os.Getpid()
 
@@ -92,7 +74,6 @@ func Test_NewProcess(t *testing.T) {
 			t.Errorf("error %v", ret)
 		}
 	}
-
 }
 
 func Test_Process_memory_maps(t *testing.T) {
@@ -130,6 +111,7 @@ func Test_Process_memory_maps(t *testing.T) {
 		t.Errorf("memory map is empty")
 	}
 }
+
 func Test_Process_MemoryInfo(t *testing.T) {
 	p := testGetProcess()
 
@@ -195,8 +177,11 @@ func Test_Process_Status(t *testing.T) {
 	if err != nil {
 		t.Errorf("getting status error %v", err)
 	}
-	if v != "R" && v != "S" {
-		t.Errorf("could not get state %v", v)
+	if len(v) == 0 {
+		t.Errorf("could not get state")
+	}
+	if v[0] != Running && v[0] != Sleep {
+		t.Errorf("got wrong state, %v", v)
 	}
 }
 
@@ -309,7 +294,7 @@ func Test_Process_Name(t *testing.T) {
 		t.Errorf("getting name error %v", err)
 	}
 	if !strings.Contains(n, "process.test") {
-		t.Errorf("invalid Exe %s", n)
+		t.Errorf("invalid Name %s", n)
 	}
 }
 
@@ -358,6 +343,7 @@ func Test_Process_Long_Name_With_Spaces(t *testing.T) {
 	}
 	cmd.Process.Kill()
 }
+
 func Test_Process_Long_Name(t *testing.T) {
 	tmpdir, err := ioutil.TempDir("", "")
 	if err != nil {
@@ -403,6 +389,7 @@ func Test_Process_Long_Name(t *testing.T) {
 	}
 	cmd.Process.Kill()
 }
+
 func Test_Process_Exe(t *testing.T) {
 	p := testGetProcess()
 
@@ -473,7 +460,7 @@ func Test_Process_CreateTime(t *testing.T) {
 	}
 
 	gotElapsed := time.Since(time.Unix(int64(c/1000), 0))
-	maxElapsed := time.Duration(5 * time.Second)
+	maxElapsed := time.Duration(20 * time.Second)
 
 	if gotElapsed >= maxElapsed {
 		t.Errorf("this process has not been running for %v", gotElapsed)
@@ -657,6 +644,13 @@ func Test_CPUTimes(t *testing.T) {
 }
 
 func Test_OpenFiles(t *testing.T) {
+	fp, err := os.Open("process_test.go")
+	assert.Nil(t, err)
+	defer func() {
+		err := fp.Close()
+		assert.Nil(t, err)
+	}()
+
 	pid := os.Getpid()
 	p, err := NewProcess(int32(pid))
 	skipIfNotImplementedErr(t, err)
@@ -774,6 +768,22 @@ func Test_Process_Environ(t *testing.T) {
 	}
 }
 
+func Test_Process_Cwd(t *testing.T) {
+	myPid := os.Getpid()
+	currentWorkingDirectory, _ := os.Getwd()
+
+	process, _ := NewProcess(int32(myPid))
+	pidCwd, err := process.Cwd()
+	skipIfNotImplementedErr(t, err)
+	if err != nil {
+		t.Fatalf("getting cwd error %v", err)
+	}
+	pidCwd = strings.TrimSuffix(pidCwd, string(os.PathSeparator))
+	assert.Equal(t, currentWorkingDirectory, pidCwd)
+
+	t.Log(pidCwd)
+}
+
 func Test_AllProcesses_cmdLine(t *testing.T) {
 	procs, err := Processes()
 	skipIfNotImplementedErr(t, err)
@@ -808,6 +818,23 @@ func Test_AllProcesses_environ(t *testing.T) {
 		}
 
 		t.Logf("Process #%v: Name: %v / Environment Variables: %v\n", proc.Pid, exeName, environ)
+	}
+}
+
+func Test_AllProcesses_Cwd(t *testing.T) {
+	procs, err := Processes()
+	skipIfNotImplementedErr(t, err)
+	if err != nil {
+		t.Fatalf("getting processes error %v", err)
+	}
+	for _, proc := range procs {
+		exeName, _ := proc.Exe()
+		cwd, err := proc.Cwd()
+		if err != nil {
+			cwd = "Error: " + err.Error()
+		}
+
+		t.Logf("Process #%v: Name: %v / Current Working Directory: %s\n", proc.Pid, exeName, cwd)
 	}
 }
 

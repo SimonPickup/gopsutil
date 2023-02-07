@@ -1,9 +1,9 @@
+//go:build linux
 // +build linux
 
 package process
 
 import (
-	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shirou/gopsutil/internal/common"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -62,8 +61,7 @@ func Test_Process_splitProcStat_fromFile(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	f := common.MockEnv("HOST_PROC", "testdata/linux")
-	defer f()
+	t.Setenv("HOST_PROC", "testdata/linux")
 	for _, pid := range pids {
 		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
 		if err != nil {
@@ -94,13 +92,12 @@ func Test_Process_splitProcStat_fromFile(t *testing.T) {
 	}
 }
 
-func Test_fillFromStatusWithContext(t *testing.T) {
+func Test_fillFromCommWithContext(t *testing.T) {
 	pids, err := ioutil.ReadDir("testdata/linux/")
 	if err != nil {
 		t.Error(err)
 	}
-	f := common.MockEnv("HOST_PROC", "testdata/linux")
-	defer f()
+	t.Setenv("HOST_PROC", "testdata/linux")
 	for _, pid := range pids {
 		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
 		if err != nil {
@@ -110,9 +107,48 @@ func Test_fillFromStatusWithContext(t *testing.T) {
 			continue
 		}
 		p, _ := NewProcess(int32(pid))
-		if err := p.fillFromStatusWithContext(context.Background()); err != nil {
+		if err := p.fillFromCommWithContext(); err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+func Test_fillFromStatusWithContext(t *testing.T) {
+	pids, err := ioutil.ReadDir("testdata/linux/")
+	if err != nil {
+		t.Error(err)
+	}
+	t.Setenv("HOST_PROC", "testdata/linux")
+	for _, pid := range pids {
+		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(fmt.Sprintf("testdata/linux/%d/status", pid)); err != nil {
+			continue
+		}
+		p, _ := NewProcess(int32(pid))
+		if err := p.fillFromStatus(); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func Benchmark_fillFromCommWithContext(b *testing.B) {
+	b.Setenv("HOST_PROC", "testdata/linux")
+	pid := 1060
+	p, _ := NewProcess(int32(pid))
+	for i := 0; i < b.N; i++ {
+		p.fillFromCommWithContext()
+	}
+}
+
+func Benchmark_fillFromStatusWithContext(b *testing.B) {
+	b.Setenv("HOST_PROC", "testdata/linux")
+	pid := 1060
+	p, _ := NewProcess(int32(pid))
+	for i := 0; i < b.N; i++ {
+		p.fillFromStatus()
 	}
 }
 
@@ -121,8 +157,7 @@ func Test_fillFromTIDStatWithContext_lx_brandz(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	f := common.MockEnv("HOST_PROC", "testdata/lx_brandz")
-	defer f()
+	t.Setenv("HOST_PROC", "testdata/lx_brandz")
 	for _, pid := range pids {
 		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
 		if err != nil {
@@ -132,7 +167,7 @@ func Test_fillFromTIDStatWithContext_lx_brandz(t *testing.T) {
 			continue
 		}
 		p, _ := NewProcess(int32(pid))
-		_, _, cpuTimes, _, _, _, _, err := p.fillFromTIDStatWithContext(context.Background(), -1)
+		_, _, cpuTimes, _, _, _, _, err := p.fillFromTIDStat(-1)
 		if err != nil {
 			t.Error(err)
 		}
