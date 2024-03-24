@@ -96,6 +96,30 @@ environment variable.
 You can set an alternative location to `/proc/N/mountinfo` by setting the
 `HOST_PROC_MOUNTINFO` environment variable.
 
+### Adding settings using `context` (from v3.23.6)
+
+As of v3.23.6, it is now possible to pass a path location using `context`: import `"github.com/shirou/gopsutil/v3/common"` and pass a context with `common.EnvMap` set to `common.EnvKey`, and the location will be used within each function.
+
+```
+	ctx := context.WithValue(context.Background(), 
+		common.EnvKey, common.EnvMap{common.HostProcEnvKey: "/myproc"},
+	)
+	v, err := mem.VirtualMemoryWithContext(ctx)
+```
+
+First priority is given to the value set in `context`, then the value from the environment variable, and finally the default location.
+
+### Caching
+
+As of v3.24.1, it is now possible to cached some values. These values default to false, not cached. 
+
+Be very careful that enabling the cache may cause inconsistencies. For example, if you enable caching of boottime on Linux, be aware that unintended values may be returned if [the boottime is changed by NTP after booted](https://github.com/shirou/gopsutil/issues/1070#issuecomment-842512782).
+
+- `host`
+  - EnableBootTimeCache
+- `process`
+  - EnableBootTimeCache
+
 ## Documentation
 
 See https://pkg.go.dev/github.com/shirou/gopsutil/v3 or https://godocs.io/github.com/shirou/gopsutil/v3
@@ -154,7 +178,7 @@ will provide useful information.
   - system wide stats on netfilter conntrack module
   - sourced from /proc/sys/net/netfilter/nf_conntrack_count
 
-Some code is ported from Ohai. many thanks.
+Some code is ported from Ohai. Many thanks.
 
 ## Current Status
 
@@ -177,7 +201,7 @@ Some code is ported from Ohai. many thanks.
 |users                 |x      |x        |x        |x       |x        |         |         |
 |pids                  |x      |x        |x        |x       |x        |         |         |
 |pid\_exists           |x      |x        |x        |x       |x        |         |         |
-|net\_connections      |x      |         |x        |x       |         |         |         |
+|net\_connections      |x      |x        |x        |x       |         |         |         |
 |net\_protocols        |x      |         |         |        |         |         |         |
 |net\_if\_addrs        |       |         |         |        |         |         |         |
 |net\_if\_stats        |       |         |         |        |         |         |         |
@@ -219,9 +243,9 @@ Some code is ported from Ohai. many thanks.
 |rlimit              |x      |         |         |       |         |
 |num\_handlers       |       |         |         |       |         |
 |threads             |x      |         |         |       |         |
-|cpu\_percent        |x      |         |x        |x      |         |
+|cpu\_percent        |x      |         |x        |x      |x        |
 |cpu\_affinity       |       |         |         |       |         |
-|memory\_percent     |       |         |         |       |         |
+|memory\_percent     |x      |         |         |       |x        |
 |parent              |x      |         |x        |x      |x        |
 |children            |x      |x        |x        |x      |x        |
 |connections         |x      |         |x        |x      |         |

@@ -1,21 +1,22 @@
 package net
 
 import (
+	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"strings"
 	"syscall"
 	"testing"
 
-	"github.com/shirou/gopsutil/v3/internal/common"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/shirou/gopsutil/v3/internal/common"
 )
 
 func TestIOCountersByFileParsing(t *testing.T) {
 	// Prpare a temporary file, which will be read during the test
-	tmpfile, err := ioutil.TempFile("", "proc_dev_net")
+	tmpfile, err := os.CreateTemp("", "proc_dev_net")
 	defer os.Remove(tmpfile.Name()) // clean up
 
 	assert.Nil(t, err, "Temporary file creation failed: ", err)
@@ -100,7 +101,7 @@ func TestGetProcInodesAll(t *testing.T) {
 	}()
 	<-waitForServer
 
-	root := common.HostProc("")
+	root := common.HostProcWithContext(context.Background(), "")
 	v, err := getProcInodesAll(root, 0)
 	assert.Nil(t, err)
 	assert.NotEmpty(t, v)
@@ -193,7 +194,7 @@ func TestReverse(t *testing.T) {
 }
 
 func TestConntrackStatFileParsing(t *testing.T) {
-	tmpfile, err := ioutil.TempFile("", "proc_net_stat_conntrack")
+	tmpfile, err := os.CreateTemp("", "proc_net_stat_conntrack")
 	defer os.Remove(tmpfile.Name())
 	assert.Nil(t, err, "Temporary file creation failed: ", err)
 
@@ -248,6 +249,7 @@ entries  searched found new invalid ignore delete deleteList insert insertFailed
 
 	// Function under test
 	stats, err := conntrackStatsFromFile(tmpfile.Name(), true)
+	assert.Nil(t, err)
 	assert.Equal(t, 8, len(stats), "Expected 8 results")
 
 	summary := &ConntrackStat{}
@@ -308,6 +310,7 @@ entries  searched found new invalid ignore delete deleteList insert insertFailed
 
 	// Test summary grouping
 	totals, err := conntrackStatsFromFile(tmpfile.Name(), false)
+	assert.Nil(t, err)
 	for i, st := range totals {
 		assert.Equal(t, summary.Entries, st.Entries)
 		assert.Equal(t, summary.Searched, st.Searched)

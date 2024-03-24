@@ -29,10 +29,11 @@ func TestHostInfo(t *testing.T) {
 	if v.Procs == 0 {
 		t.Errorf("Could not determine the number of host processes")
 	}
+	t.Log(v)
 }
 
 func TestUptime(t *testing.T) {
-	if os.Getenv("CIRCLECI") == "true" {
+	if os.Getenv("CI") == "true" {
 		t.Skip("Skip CI")
 	}
 
@@ -47,7 +48,7 @@ func TestUptime(t *testing.T) {
 }
 
 func TestBoot_time(t *testing.T) {
-	if os.Getenv("CIRCLECI") == "true" {
+	if os.Getenv("CI") == "true" {
 		t.Skip("Skip CI")
 	}
 	v, err := BootTime()
@@ -88,6 +89,7 @@ func TestUsers(t *testing.T) {
 		if u == empty {
 			t.Errorf("Could not Users %v", v)
 		}
+		t.Log(u)
 	}
 }
 
@@ -192,4 +194,18 @@ func TestPlatformInformation(t *testing.T) {
 	}
 
 	t.Logf("PlatformInformation(): %v, %v, %v", platform, family, version)
+}
+
+func BenchmarkBootTimeWithCache(b *testing.B) {
+	EnableBootTimeCache(true)
+	for i := 0; i < b.N; i++ {
+		BootTime()
+	}
+}
+
+func BenchmarkBootTimeWithoutCache(b *testing.B) {
+	EnableBootTimeCache(false)
+	for i := 0; i < b.N; i++ {
+		BootTime()
+	}
 }
