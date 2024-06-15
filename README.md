@@ -32,7 +32,7 @@ can be skipped.
 - Linux i386/amd64/arm(raspberry pi)
 - Windows i386/amd64/arm/arm64
 - Darwin amd64/arm64
-- OpenBSD amd64 (Thank you @mpfz0r!)
+- OpenBSD i386/amd64/armv7/arm64/riscv64 (Thank you @mpfz0r!)
 - Solaris amd64 (developed and tested on SmartOS/Illumos, Thank you
   @jen20!)
 
@@ -218,7 +218,7 @@ Some code is ported from Ohai. Many thanks.
 |cmdline             |x      |x        |         |x      |x        |
 |create\_time        |x      |         |         |x      |x        |
 |status              |x      |x        |x        |x      |         |
-|cwd                 |x      |         |         |x      |         |
+|cwd                 |x      |         |         |x      |x        |
 |exe                 |x      |x        |x        |       |x        |
 |uids                |x      |x        |x        |x      |         |
 |gids                |x      |x        |x        |x      |         |
