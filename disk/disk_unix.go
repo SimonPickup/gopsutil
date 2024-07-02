@@ -1,5 +1,5 @@
-//go:build freebsd || linux || darwin || ios || (aix && !cgo)
-// +build freebsd linux darwin ios aix,!cgo
+//go:build freebsd || linux || darwin || ios
+// +build freebsd linux darwin
 
 package disk
 
