@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
 //go:build freebsd
-// +build freebsd
 
 package net
 
@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/shirou/gopsutil/v3/internal/common"
+	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
 func IOCounters(pernic bool) ([]IOCountersStat, error) {
@@ -83,7 +83,7 @@ func IOCountersWithContext(ctx context.Context, pernic bool) ([]IOCountersStat, 
 		ret = append(ret, n)
 	}
 
-	if pernic == false {
+	if !pernic {
 		return getIOCountersAll(ret)
 	}
 
@@ -96,7 +96,7 @@ func IOCountersByFile(pernic bool, filename string) ([]IOCountersStat, error) {
 }
 
 func IOCountersByFileWithContext(ctx context.Context, pernic bool, filename string) ([]IOCountersStat, error) {
-	return IOCounters(pernic)
+	return IOCountersWithContext(ctx, pernic)
 }
 
 func FilterCounters() ([]FilterStat, error) {

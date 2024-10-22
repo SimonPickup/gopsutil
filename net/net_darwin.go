@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
 //go:build darwin
-// +build darwin
 
 package net
 
@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/shirou/gopsutil/v3/internal/common"
+	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
 var (
@@ -143,8 +143,8 @@ func newMapInterfaceNameUsage(ifaces []netstatInterface) mapInterfaceNameUsage {
 	return output
 }
 
-func (min mapInterfaceNameUsage) isTruncated() bool {
-	for _, usage := range min {
+func (mapi mapInterfaceNameUsage) isTruncated() bool {
+	for _, usage := range mapi {
 		if usage > 1 {
 			return true
 		}
@@ -152,9 +152,9 @@ func (min mapInterfaceNameUsage) isTruncated() bool {
 	return false
 }
 
-func (min mapInterfaceNameUsage) notTruncated() []string {
+func (mapi mapInterfaceNameUsage) notTruncated() []string {
 	output := make([]string, 0)
-	for ifaceName, usage := range min {
+	for ifaceName, usage := range mapi {
 		if usage == 1 {
 			output = append(output, ifaceName)
 		}
@@ -247,7 +247,7 @@ func IOCountersWithContext(ctx context.Context, pernic bool) ([]IOCountersStat, 
 		}
 	}
 
-	if pernic == false {
+	if !pernic {
 		return getIOCountersAll(ret)
 	}
 	return ret, nil

@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
 //go:build linux
-// +build linux
 
 package cpu
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/tklauser/go-sysconf"
 
-	"github.com/shirou/gopsutil/v3/internal/common"
+	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
 var ClocksPerSec = float64(100)
@@ -395,7 +395,7 @@ func CountsWithContext(ctx context.Context, logical bool) (int, error) {
 			for _, line := range lines {
 				line = strings.ToLower(line)
 				if strings.HasPrefix(line, "processor") {
-					_, err = strconv.Atoi(strings.TrimSpace(line[strings.IndexByte(line, ':')+1:]))
+					_, err = strconv.ParseInt(strings.TrimSpace(line[strings.IndexByte(line, ':')+1:]), 10, 32)
 					if err == nil {
 						ret++
 					}
@@ -464,11 +464,11 @@ func CountsWithContext(ctx context.Context, logical bool) (int, error) {
 		}
 		fields[0] = strings.TrimSpace(fields[0])
 		if fields[0] == "physical id" || fields[0] == "cpu cores" {
-			val, err := strconv.Atoi(strings.TrimSpace(fields[1]))
+			val, err := strconv.ParseInt(strings.TrimSpace(fields[1]), 10, 32)
 			if err != nil {
 				continue
 			}
-			currentInfo[fields[0]] = val
+			currentInfo[fields[0]] = int(val)
 		}
 	}
 	ret := 0

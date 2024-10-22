@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 package process
 
 import (
@@ -9,15 +10,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/internal/common"
-	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/internal/common"
+	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/net"
 )
 
 var (
 	invoke                 common.Invoker = common.Invoke{}
-	ErrorNoChildren                       = errors.New("process does not have children")
+	ErrorNoChildren                       = errors.New("process does not have children") // Deprecated: ErrorNoChildren is never returned by process.Children(), check its returned []*Process slice length instead
 	ErrorProcessNotRunning                = errors.New("process does not exist")
 	ErrorNotPermitted                     = errors.New("operation not permitted")
 )
@@ -29,9 +30,9 @@ type Process struct {
 	parent         int32
 	parentMutex    sync.RWMutex // for windows ppid cache
 	numCtxSwitches *NumCtxSwitchesStat
-	uids           []int32
-	gids           []int32
-	groups         []int32
+	uids           []uint32
+	gids           []uint32
+	groups         []uint32
 	numThreads     int32
 	memInfo        *MemoryInfoStat
 	sigInfo        *SignalInfoStat
@@ -102,10 +103,18 @@ type RlimitStat struct {
 }
 
 type IOCountersStat struct {
-	ReadCount  uint64 `json:"readCount"`
+	// ReadCount is a number of read I/O operations such as syscalls.
+	ReadCount uint64 `json:"readCount"`
+	// WriteCount is a number of read I/O operations such as syscalls.
 	WriteCount uint64 `json:"writeCount"`
-	ReadBytes  uint64 `json:"readBytes"`
+	// ReadBytes is a number of all I/O read in bytes. This includes disk I/O on Linux and Windows.
+	ReadBytes uint64 `json:"readBytes"`
+	// WriteBytes is a number of all I/O write in bytes. This includes disk I/O on Linux and Windows.
 	WriteBytes uint64 `json:"writeBytes"`
+	// DiskReadBytes is a number of disk I/O write in bytes. Currently only Linux has this value.
+	DiskReadBytes uint64 `json:"diskReadBytes"`
+	// DiskWriteBytes is a number of disk I/O read in bytes.  Currently only Linux has this value.
+	DiskWriteBytes uint64 `json:"diskWriteBytes"`
 }
 
 type NumCtxSwitchesStat struct {
@@ -316,7 +325,11 @@ func calculatePercent(t1, t2 *cpu.TimesStat, delta float64, numcpu int) float64 
 	if delta == 0 {
 		return 0
 	}
-	delta_proc := t2.Total() - t1.Total()
+	// https://github.com/giampaolo/psutil/blob/c034e6692cf736b5e87d14418a8153bb03f6cf42/psutil/__init__.py#L1064
+	delta_proc := (t2.User - t1.User) + (t2.System - t1.System)
+	if delta_proc <= 0 {
+		return 0
+	}
 	overall_percent := ((delta_proc / delta) * 100) * float64(numcpu)
 	return overall_percent
 }
@@ -368,7 +381,7 @@ func (p *Process) CPUPercentWithContext(ctx context.Context) (float64, error) {
 }
 
 // Groups returns all group IDs(include supplementary groups) of the process as a slice of the int
-func (p *Process) Groups() ([]int32, error) {
+func (p *Process) Groups() ([]uint32, error) {
 	return p.GroupsWithContext(context.Background())
 }
 
@@ -433,12 +446,12 @@ func (p *Process) Foreground() (bool, error) {
 }
 
 // Uids returns user ids of the process as a slice of the int
-func (p *Process) Uids() ([]int32, error) {
+func (p *Process) Uids() ([]uint32, error) {
 	return p.UidsWithContext(context.Background())
 }
 
 // Gids returns group ids of the process as a slice of the int
-func (p *Process) Gids() ([]int32, error) {
+func (p *Process) Gids() ([]uint32, error) {
 	return p.GidsWithContext(context.Background())
 }
 
@@ -538,8 +551,8 @@ func (p *Process) Connections() ([]net.ConnectionStat, error) {
 }
 
 // ConnectionsMax returns a slice of net.ConnectionStat used by the process at most `max`.
-func (p *Process) ConnectionsMax(max int) ([]net.ConnectionStat, error) {
-	return p.ConnectionsMaxWithContext(context.Background(), max)
+func (p *Process) ConnectionsMax(maxConn int) ([]net.ConnectionStat, error) {
+	return p.ConnectionsMaxWithContext(context.Background(), maxConn)
 }
 
 // MemoryMaps get memory maps from /proc/(pid)/smaps

@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
 //go:build linux
-// +build linux
 
 package process
 
@@ -12,9 +12,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func Test_Process_splitProcStat(t *testing.T) {
+func TestSplitProcStat(t *testing.T) {
 	expectedFieldsNum := 53
 	statLineContent := make([]string, expectedFieldsNum-1)
 	for i := 0; i < expectedFieldsNum-1; i++ {
@@ -56,7 +57,7 @@ func Test_Process_splitProcStat(t *testing.T) {
 	}
 }
 
-func Test_Process_splitProcStat_fromFile(t *testing.T) {
+func TestSplitProcStat_fromFile(t *testing.T) {
 	pids, err := os.ReadDir("testdata/linux/")
 	if err != nil {
 		t.Error(err)
@@ -92,7 +93,7 @@ func Test_Process_splitProcStat_fromFile(t *testing.T) {
 	}
 }
 
-func Test_fillFromCommWithContext(t *testing.T) {
+func TestFillFromCommWithContext(t *testing.T) {
 	pids, err := os.ReadDir("testdata/linux/")
 	if err != nil {
 		t.Error(err)
@@ -113,7 +114,7 @@ func Test_fillFromCommWithContext(t *testing.T) {
 	}
 }
 
-func Test_fillFromStatusWithContext(t *testing.T) {
+func TestFillFromStatusWithContext(t *testing.T) {
 	pids, err := os.ReadDir("testdata/linux/")
 	if err != nil {
 		t.Error(err)
@@ -152,7 +153,7 @@ func Benchmark_fillFromStatusWithContext(b *testing.B) {
 	}
 }
 
-func Test_fillFromTIDStatWithContext_lx_brandz(t *testing.T) {
+func TestFillFromTIDStatWithContext_lx_brandz(t *testing.T) {
 	pids, err := os.ReadDir("testdata/lx_brandz/")
 	if err != nil {
 		t.Error(err)
@@ -173,4 +174,70 @@ func Test_fillFromTIDStatWithContext_lx_brandz(t *testing.T) {
 		}
 		assert.Equal(t, float64(0), cpuTimes.Iowait)
 	}
+}
+
+func TestProcessMemoryMaps(t *testing.T) {
+	t.Setenv("HOST_PROC", "testdata/linux")
+	pid := 1
+	p, err := NewProcess(int32(pid))
+	require.NoError(t, err)
+	maps, err := p.MemoryMaps(false)
+	require.NoError(t, err)
+
+	expected := &[]MemoryMapsStat{
+		{
+			"[vvar]",
+			0,
+			1,
+			0,
+			3,
+			4,
+			5,
+			6,
+			7,
+			8,
+			9,
+		},
+		{
+			"",
+			0,
+			1,
+			2,
+			3,
+			4,
+			0,
+			6,
+			7,
+			8,
+			9,
+		},
+		{
+			"[vdso]",
+			0,
+			1,
+			2,
+			3,
+			4,
+			5,
+			0,
+			7,
+			8,
+			9,
+		},
+		{
+			"/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+			0,
+			1,
+			2,
+			3,
+			4,
+			5,
+			6,
+			7,
+			0,
+			9,
+		},
+	}
+
+	require.Equal(t, expected, maps)
 }
