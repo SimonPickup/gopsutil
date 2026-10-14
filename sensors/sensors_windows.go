@@ -5,13 +5,13 @@ package sensors
 
 import (
 	"context"
-	"math"
+
+	"github.com/yusufpapurcu/wmi"
 
 	"github.com/shirou/gopsutil/v4/internal/common"
-	"github.com/yusufpapurcu/wmi"
 )
 
-type msAcpi_ThermalZoneTemperature struct {
+type msAcpi_ThermalZoneTemperature struct { //nolint:revive //FIXME
 	Active             bool
 	CriticalTripPoint  uint32
 	CurrentTemperature uint32
@@ -29,7 +29,7 @@ func TemperaturesWithContext(ctx context.Context) ([]TemperatureStat, error) {
 	for _, v := range dst {
 		ts := TemperatureStat{
 			SensorKey:   v.InstanceName,
-			Temperature: kelvinToCelsius(v.CurrentTemperature, 2),
+			Temperature: kelvinToCelsius(v.CurrentTemperature),
 		}
 		ret = append(ret, ts)
 	}
@@ -37,10 +37,8 @@ func TemperaturesWithContext(ctx context.Context) ([]TemperatureStat, error) {
 	return ret, nil
 }
 
-func kelvinToCelsius(temp uint32, n int) float64 {
+func kelvinToCelsius(temp uint32) float64 {
 	// wmi return temperature Kelvin * 10, so need to divide the result by 10,
 	// and then minus 273.15 to get °Celsius.
-	t := float64(temp/10) - 273.15
-	n10 := math.Pow10(n)
-	return math.Trunc((t+0.5/n10)*n10) / n10
+	return (float64(temp*10) - 27315) / 100
 }

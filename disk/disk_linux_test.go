@@ -1,0 +1,203 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//go:build linux
+
+package disk
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func Test_parseFieldsOnMountinfo(t *testing.T) {
+	lines := []string{
+		"05   2 9:126 /           /              rw,noatime                      shared:1   - ext4  /dev/sda1 rw",
+		"06   3 9:127 /           /foo           rw,noatime                      shared:1   - ext4  /dev/sda2 rw",
+		"07   3 9:127 /bar        /foo/bar       rw,noatime                      shared:1   - ext4  /dev/sda2 rw", // "bind mount" on /foo
+		"22  13 0:19  /           /dev/shm       rw,nosuid,nodev,noexec,relatime            - tmpfs -         rw",
+		"37  29  0:4  net:[12345] /run/netns/foo rw                              shared:552 - nsfs  nsfs      rw",
+		"111 80 0:22  /           /sys           rw,nosuid,nodev,noexec,noatime  shared:15  - sysfs sysfs     rw",
+		"114 80 0:61  /           /run           rw,nosuid,nodev                 shared:18  - tmpfs none      rw,mode=755",
+	}
+
+	cases := map[string]struct {
+		all    bool
+		expect []PartitionStat
+	}{
+		"all": {
+			all: true,
+			expect: []PartitionStat{
+				{Device: "/dev/sda1", Mountpoint: "/", Fstype: "ext4", Opts: []string{"rw", "noatime"}},
+				{Device: "/dev/sda2", Mountpoint: "/foo", Fstype: "ext4", Opts: []string{"rw", "noatime"}},
+				{Device: "/dev/sda2", Mountpoint: "/foo/bar", Fstype: "ext4", Opts: []string{"rw", "noatime", "bind"}},
+				{Device: "-", Mountpoint: "/dev/shm", Fstype: "tmpfs", Opts: []string{"rw", "nosuid", "nodev", "noexec", "relatime"}},
+				{Device: "net:[12345]", Mountpoint: "/run/netns/foo", Fstype: "nsfs", Opts: []string{"rw"}},
+				{Device: "sysfs", Mountpoint: "/sys", Fstype: "sysfs", Opts: []string{"rw", "nosuid", "nodev", "noexec", "noatime"}},
+				{Device: "none", Mountpoint: "/run", Fstype: "tmpfs", Opts: []string{"rw", "nosuid", "nodev"}},
+			},
+		},
+		"not all": {
+			all: false,
+			expect: []PartitionStat{
+				{Device: "/dev/sda1", Mountpoint: "/", Fstype: "ext4", Opts: []string{"rw", "noatime"}},
+				{Device: "/dev/sda2", Mountpoint: "/foo", Fstype: "ext4", Opts: []string{"rw", "noatime"}},
+			},
+		},
+	}
+
+	// Real (non-"nodev") filesystems as returned by getFileSystems(); virtual
+	// filesystems such as tmpfs/nsfs/sysfs are intentionally absent.
+	fs := []string{"ext4", "btrfs", "zfs"}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			actual, err := parseFieldsOnMountinfo(context.Background(), lines, c.all, fs, "")
+			require.NoError(t, err)
+			assert.Equal(t, c.expect, actual)
+		})
+	}
+}
+
+func Test_parseFieldsOnMountinfo_multiMount(t *testing.T) {
+	// Reproduces issue #2005: same block device (259:4) mounted multiple times
+	// with different rootDirs. Bind mounts should be detected by rootDir != "/",
+	// not by whether the device ID was seen before.
+	lines := []string{
+		"1204 1184 259:4 /var/lib/kubelet/pods/abc/volumes/tmp     /tmp               rw,relatime shared:1 - ext4 /dev/nvme0n1p3 rw",
+		"1205 1184 259:4 /var/lib/kubelet/pods/abc/volumes/config  /etc/datadog-agent rw,relatime shared:1 - ext4 /dev/nvme0n1p3 rw",
+		"1209 1184 259:4 /etc/passwd                               /etc/passwd        ro,relatime shared:1 - ext4 /dev/nvme0n1p3 rw",
+		"1210 1184 259:4 /                                         /host/root         ro,relatime shared:1 - ext4 /dev/nvme0n1p3 rw",
+	}
+
+	actual, err := parseFieldsOnMountinfo(context.Background(), lines, true, nil, "")
+	require.NoError(t, err)
+
+	expected := []PartitionStat{
+		{Device: "/dev/nvme0n1p3", Mountpoint: "/tmp", Fstype: "ext4", Opts: []string{"rw", "relatime", "bind"}},
+		{Device: "/dev/nvme0n1p3", Mountpoint: "/etc/datadog-agent", Fstype: "ext4", Opts: []string{"rw", "relatime", "bind"}},
+		{Device: "/dev/nvme0n1p3", Mountpoint: "/etc/passwd", Fstype: "ext4", Opts: []string{"ro", "relatime", "bind"}},
+		{Device: "/dev/nvme0n1p3", Mountpoint: "/host/root", Fstype: "ext4", Opts: []string{"ro", "relatime"}},
+	}
+	assert.Equal(t, expected, actual)
+}
+
+func Test_parseFieldsOnMountinfo_effectiveReadWriteMode(t *testing.T) {
+	lines := []string{
+		"36 35 253:0 / / rw,relatime - ext4 /dev/mapper/vg1-lv_root ro,seclabel,relatime,commit=60,data=ordered",
+		"37 35 253:1 / /mnt/readonly ro,relatime - ext4 /dev/mapper/vg1-lv_ro rw,seclabel,relatime,commit=60,data=ordered",
+		"38 35 253:2 / /mnt/readwrite rw,relatime - ext4 /dev/mapper/vg1-lv_rw rw,seclabel,relatime,commit=60,data=ordered",
+	}
+
+	actual, err := parseFieldsOnMountinfo(context.Background(), lines, true, nil, "")
+	require.NoError(t, err)
+
+	expected := []PartitionStat{
+		{Device: "/dev/mapper/vg1-lv_root", Mountpoint: "/", Fstype: "ext4", Opts: []string{"ro", "relatime"}},
+		{Device: "/dev/mapper/vg1-lv_ro", Mountpoint: "/mnt/readonly", Fstype: "ext4", Opts: []string{"ro", "relatime"}},
+		{Device: "/dev/mapper/vg1-lv_rw", Mountpoint: "/mnt/readwrite", Fstype: "ext4", Opts: []string{"rw", "relatime"}},
+	}
+	assert.Equal(t, expected, actual)
+}
+
+// Test_parseFieldsOnMountinfo_issue2100 ensures that, with all=false, zfs
+// filesystems (whose source is a dataset name, not a "/"-prefixed path) and
+// btrfs subvolumes (whose rootDir != "/" but which are not bind mounts) are
+// still reported. See https://github.com/shirou/gopsutil/issues/2100.
+func Test_parseFieldsOnMountinfo_issue2100(t *testing.T) {
+	lines := []string{
+		// btrfs top-level subvolume (rootDir "/", subvol=/)
+		"129 80 0:67 / /mnt/foo rw,noatime - btrfs /dev/sdd rw,space_cache=v2,subvolid=5,subvol=/",
+		// btrfs non-top subvolume (rootDir "/sub1", subvol=/sub1):
+		// must NOT be treated as a bind mount and must survive all=false.
+		"362 80 0:67 /sub1 /mnt/bar rw,relatime - btrfs /dev/sdd rw,space_cache=v2,subvolid=256,subvol=/sub1",
+		// zfs dataset (source "pool/dataset" is not "/"-prefixed): must survive all=false.
+		"363 80 0:70 / /data rw,noatime - zfs pool/dataset rw",
+		// a real bind mount (rootDir != "/", no subvol option): must be dropped when all=false.
+		"364 80 9:127 /bar /foo/bar rw,noatime - ext4 /dev/sda2 rw",
+		// a btrfs bind mount of a subdirectory: rootDir (/sub1/sub) is deeper
+		// than subvol= (/sub1), so it is a bind and must be dropped when all=false.
+		"366 80 0:67 /sub1/sub /mnt/baz rw,relatime - btrfs /dev/sdd rw,space_cache=v2,subvolid=256,subvol=/sub1",
+		// a virtual filesystem: must be dropped when all=false.
+		"365 80 0:22 / /sys rw,nosuid,nodev,noexec,noatime - sysfs sysfs rw",
+	}
+
+	fs := []string{"ext4", "btrfs", "zfs"}
+
+	actual, err := parseFieldsOnMountinfo(context.Background(), lines, false, fs, "")
+	require.NoError(t, err)
+
+	expected := []PartitionStat{
+		{Device: "/dev/sdd", Mountpoint: "/mnt/foo", Fstype: "btrfs", Opts: []string{"rw", "noatime"}},
+		{Device: "/dev/sdd", Mountpoint: "/mnt/bar", Fstype: "btrfs", Opts: []string{"rw", "relatime"}},
+		{Device: "pool/dataset", Mountpoint: "/data", Fstype: "zfs", Opts: []string{"rw", "noatime"}},
+	}
+	assert.Equal(t, expected, actual)
+}
+
+func Test_parseFieldsOnMounts(t *testing.T) {
+	fs := []string{"sysfs", "tmpfs"}
+
+	lines := []string{
+		"sysfs /sys sysfs rw,nosuid,nodev,noexec,noatime 0 0",
+		"none /run tmpfs rw,nosuid,nodev,mode=755 0 0",
+	}
+
+	cases := map[string]struct {
+		all    bool
+		expect []PartitionStat
+	}{
+		"all": {
+			all: true,
+			expect: []PartitionStat{
+				{Device: "sysfs", Mountpoint: "/sys", Fstype: "sysfs", Opts: []string{"rw", "nosuid", "nodev", "noexec", "noatime"}},
+				{Device: "none", Mountpoint: "/run", Fstype: "tmpfs", Opts: []string{"rw", "nosuid", "nodev", "mode=755"}},
+			},
+		},
+		"not all": {
+			all: false,
+			expect: []PartitionStat{
+				{Device: "sysfs", Mountpoint: "/sys", Fstype: "sysfs", Opts: []string{"rw", "nosuid", "nodev", "noexec", "noatime"}},
+			},
+		},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			actual := parseFieldsOnMounts(lines, c.all, fs)
+			assert.Equal(t, c.expect, actual)
+		})
+	}
+}
+
+func TestGetDeviceName(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected string
+	}{
+		// Controller notation conversion
+		{"nvme0c0n1", "nvme0n1"},
+		{"nvme10c23n1", "nvme10n1"},
+		{"nvme5c5n2", "nvme5n2"},
+
+		// Controller and partition together
+		{"nvme0c0n1p1", "nvme0n1p1"},
+		{"nvme2c2n1p2", "nvme2n1p2"},
+		{"nvme10c23n1p3", "nvme10n1p3"},
+
+		// Should NOT be changed
+		{"nvme0n1", "nvme0n1"},     // standard notation
+		{"nvme0n1p1", "nvme0n1p1"}, // partition
+		{"sda", "sda"},             // non-nvme
+		{"nvme5", "nvme5"},         // incomplete
+		{"nvme0c0", "nvme0c0"},     // no namespace
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			actual := getDeviceName(tc.input)
+			assert.Equal(t, tc.expected, actual)
+		})
+	}
+}

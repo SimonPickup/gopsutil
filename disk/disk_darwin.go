@@ -5,7 +5,11 @@ package disk
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -15,7 +19,7 @@ import (
 
 // PartitionsWithContext returns disk partition.
 // 'all' argument is ignored, see: https://github.com/giampaolo/psutil/issues/906
-func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, error) {
+func PartitionsWithContext(_ context.Context, _ bool) ([]PartitionStat, error) {
 	var ret []PartitionStat
 
 	count, err := unix.Getfsstat(nil, unix.MNT_WAIT)
@@ -32,7 +36,8 @@ func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, erro
 	// to prevent accessing uninitialized entries.
 	// https://github.com/shirou/gopsutil/issues/1390
 	fs = fs[:count]
-	for _, stat := range fs {
+	for i := range fs {
+		stat := &fs[i]
 		opts := []string{"rw"}
 		if stat.Flags&unix.MNT_RDONLY != 0 {
 			opts = []string{"ro"}
@@ -70,6 +75,12 @@ func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, erro
 		if stat.Flags&unix.MNT_NODEV != 0 {
 			opts = append(opts, "nodev")
 		}
+		if stat.Flags&unix.MNT_LOCAL != 0 {
+			opts = append(opts, "local")
+		}
+		if stat.Flags&unix.MNT_CPROTECT != 0 {
+			opts = append(opts, "protect")
+		}
 		d := PartitionStat{
 			Device:     common.ByteToString(stat.Mntfromname[:]),
 			Mountpoint: common.ByteToString(stat.Mntonname[:]),
@@ -87,68 +98,116 @@ func getFsType(stat unix.Statfs_t) string {
 	return common.ByteToString(stat.Fstypename[:])
 }
 
-func SerialNumberWithContext(ctx context.Context, name string) (string, error) {
+type spnvmeDataTypeItem struct {
+	Name              string `json:"_name"`
+	BsdName           string `json:"bsd_name"`
+	DetachableDrive   string `json:"detachable_drive"`
+	DeviceModel       string `json:"device_model"`
+	DeviceRevision    string `json:"device_revision"`
+	DeviceSerial      string `json:"device_serial"`
+	PartitionMapType  string `json:"partition_map_type"`
+	RemovableMedia    string `json:"removable_media"`
+	Size              string `json:"size"`
+	SizeInBytes       int64  `json:"size_in_bytes"`
+	SmartStatus       string `json:"smart_status"`
+	SpnvmeTrimSupport string `json:"spnvme_trim_support"`
+	Volumes           []struct {
+		Name        string `json:"_name"`
+		BsdName     string `json:"bsd_name"`
+		Iocontent   string `json:"iocontent"`
+		Size        string `json:"size"`
+		SizeInBytes int    `json:"size_in_bytes"`
+	} `json:"volumes"`
+}
+
+type spnvmeDataWrapper struct {
+	SPNVMeDataType []struct {
+		Items []spnvmeDataTypeItem `json:"_items"`
+	} `json:"SPNVMeDataType"`
+}
+
+func SerialNumberWithContext(ctx context.Context, _ string) (string, error) {
+	output, err := invoke.CommandWithContext(ctx, "system_profiler", "SPNVMeDataType", "-json")
+	if err != nil {
+		return "", err
+	}
+
+	var data spnvmeDataWrapper
+	if err := json.Unmarshal(output, &data); err != nil {
+		return "", fmt.Errorf("failed to unmarshal JSON: %w", err)
+	}
+
+	// Extract all serial numbers into a single string
+	var serialNumbers []string
+	for i := range data.SPNVMeDataType {
+		spnvmeData := &data.SPNVMeDataType[i]
+		for j := range spnvmeData.Items {
+			item := &spnvmeData.Items[j]
+			serialNumbers = append(serialNumbers, item.DeviceSerial)
+		}
+	}
+
+	if len(serialNumbers) == 0 {
+		return "", errors.New("no serial numbers found")
+	}
+
+	return strings.Join(serialNumbers, ", "), nil
+}
+
+func LabelWithContext(_ context.Context, _ string) (string, error) {
 	return "", common.ErrNotImplementedError
 }
 
-func LabelWithContext(ctx context.Context, name string) (string, error) {
-	return "", common.ErrNotImplementedError
+// Keep IOKit and CoreFoundation libraries open for the process lifetime.
+// See: https://github.com/shirou/gopsutil/issues/1832
+var (
+	diskLibOnce sync.Once
+	diskIOKit   *common.IOKitLib
+	diskCF      *common.CoreFoundationLib
+	diskLibErr  error
+)
+
+func initDiskLibraries() {
+	diskIOKit, diskLibErr = common.NewIOKitLib()
+	if diskLibErr != nil {
+		return
+	}
+	diskCF, diskLibErr = common.NewCoreFoundationLib()
 }
 
-func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOCountersStat, error) {
-	ioKit, err := common.NewLibrary(common.IOKit)
-	if err != nil {
-		return nil, err
+func IOCountersWithContext(_ context.Context, names ...string) (map[string]IOCountersStat, error) {
+	diskLibOnce.Do(initDiskLibraries)
+	if diskLibErr != nil {
+		return nil, diskLibErr
 	}
-	defer ioKit.Close()
 
-	coreFoundation, err := common.NewLibrary(common.CoreFoundation)
-	if err != nil {
-		return nil, err
-	}
-	defer coreFoundation.Close()
+	iokit := diskIOKit
+	corefoundation := diskCF
 
-	ioServiceMatching := common.GetFunc[common.IOServiceMatchingFunc](ioKit, common.IOServiceMatchingSym)
-	ioServiceGetMatchingServices := common.GetFunc[common.IOServiceGetMatchingServicesFunc](ioKit, common.IOServiceGetMatchingServicesSym)
-	ioIteratorNext := common.GetFunc[common.IOIteratorNextFunc](ioKit, common.IOIteratorNextSym)
-	ioObjectRelease := common.GetFunc[common.IOObjectReleaseFunc](ioKit, common.IOObjectReleaseSym)
+	match := iokit.IOServiceMatching("IOMedia")
 
-	cfDictionaryAddValue := common.GetFunc[common.CFDictionaryAddValueFunc](coreFoundation, common.CFDictionaryAddValueSym)
-	cfStringCreateWithCString := common.GetFunc[common.CFStringCreateWithCStringFunc](coreFoundation, common.CFStringCreateWithCStringSym)
-	cfRelease := common.GetFunc[common.CFReleaseFunc](coreFoundation, common.CFReleaseSym)
+	key := corefoundation.CFStringCreateWithCString(common.KCFAllocatorDefault, common.KIOMediaWholeKey, common.KCFStringEncodingUTF8)
+	defer corefoundation.CFRelease(uintptr(key))
 
-	kCFBooleanTruePtr, _ := coreFoundation.Dlsym("kCFBooleanTrue")
-
-	match := ioServiceMatching("IOMedia")
-
-	key := cfStringCreateWithCString(common.KCFAllocatorDefault, common.KIOMediaWholeKey, common.KCFStringEncodingUTF8)
-	defer cfRelease(uintptr(key))
+	kCFBooleanTruePtr, _ := corefoundation.Dlsym("kCFBooleanTrue")
+	kCFBooleanTrue := **(**uintptr)(unsafe.Pointer(&kCFBooleanTruePtr))
+	corefoundation.CFDictionaryAddValue(uintptr(match), uintptr(key), kCFBooleanTrue)
 
 	var drives uint32
-	kCFBooleanTrue := **(**uintptr)(unsafe.Pointer(&kCFBooleanTruePtr))
-	cfDictionaryAddValue(uintptr(match), uintptr(key), kCFBooleanTrue)
-	if status := ioServiceGetMatchingServices(common.KIOMainPortDefault, uintptr(match), &drives); status != common.KERN_SUCCESS {
+	if status := iokit.IOServiceGetMatchingServices(common.KIOMainPortDefault, uintptr(match), &drives); status != common.KERN_SUCCESS {
 		return nil, fmt.Errorf("IOServiceGetMatchingServices error=%d", status)
 	}
-	defer ioObjectRelease(drives)
+	defer iokit.IOObjectRelease(drives)
 
 	ic := &ioCounters{
-		ioKit:          ioKit,
-		coreFoundation: coreFoundation,
-
-		ioRegistryEntryCreateCFProperties: common.GetFunc[common.IORegistryEntryCreateCFPropertiesFunc](ioKit, common.IORegistryEntryCreateCFPropertiesSym),
-		ioObjectRelease:                   ioObjectRelease,
-
-		cfStringCreateWithCString: cfStringCreateWithCString,
-		cfDictionaryGetValue:      common.GetFunc[common.CFDictionaryGetValueFunc](coreFoundation, common.CFDictionaryGetValueSym),
-		cfNumberGetValue:          common.GetFunc[common.CFNumberGetValueFunc](coreFoundation, common.CFNumberGetValueSym),
-		cfRelease:                 cfRelease,
+		iokit:          iokit,
+		corefoundation: corefoundation,
 	}
 
 	stats := make([]IOCountersStat, 0, 16)
 	for {
-		d := ioIteratorNext(drives)
-		if !(d > 0) {
+		d := iokit.IOIteratorNext(drives)
+		if d <= 0 {
 			break
 		}
 
@@ -161,7 +220,7 @@ func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOC
 			stats = append(stats, *stat)
 		}
 
-		ioObjectRelease(d)
+		iokit.IOObjectRelease(d)
 	}
 
 	ret := make(map[string]IOCountersStat, 0)
@@ -181,9 +240,9 @@ func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOC
 }
 
 const (
-	kIOBSDNameKey                 = "BSD Name"
-	kIOMediaSizeKey               = "Size"
-	kIOMediaPreferredBlockSizeKey = "Preferred Block Size"
+	kIOBSDNameKey = "BSD Name"
+	// kIOMediaSizeKey               = "Size"
+	// kIOMediaPreferredBlockSizeKey = "Preferred Block Size"
 
 	kIOBlockStorageDriverStatisticsKey               = "Statistics"
 	kIOBlockStorageDriverStatisticsBytesReadKey      = "Bytes (Read)"
@@ -195,48 +254,34 @@ const (
 )
 
 type ioCounters struct {
-	ioKit          *common.Library
-	coreFoundation *common.Library
-
-	ioRegistryEntryCreateCFProperties common.IORegistryEntryCreateCFPropertiesFunc
-	ioObjectRelease                   common.IOObjectReleaseFunc
-
-	cfStringCreateWithCString common.CFStringCreateWithCStringFunc
-	cfDictionaryGetValue      common.CFDictionaryGetValueFunc
-	cfNumberGetValue          common.CFNumberGetValueFunc
-	cfRelease                 common.CFReleaseFunc
+	iokit          *common.IOKitLib
+	corefoundation *common.CoreFoundationLib
 }
 
 func (i *ioCounters) getDriveStat(d uint32) (*IOCountersStat, error) {
-	ioRegistryEntryGetParentEntry := common.GetFunc[common.IORegistryEntryGetParentEntryFunc](i.ioKit, common.IORegistryEntryGetParentEntrySym)
-	ioObjectConformsTo := common.GetFunc[common.IOObjectConformsToFunc](i.ioKit, common.IOObjectConformsToSym)
-
-	cfStringGetLength := common.GetFunc[common.CFStringGetLengthFunc](i.coreFoundation, common.CFStringGetLengthSym)
-	cfStringGetCString := common.GetFunc[common.CFStringGetCStringFunc](i.coreFoundation, common.CFStringGetCStringSym)
-
 	var parent uint32
-	if status := ioRegistryEntryGetParentEntry(d, common.KIOServicePlane, &parent); status != common.KERN_SUCCESS {
+	if status := i.iokit.IORegistryEntryGetParentEntry(d, common.KIOServicePlane, &parent); status != common.KERN_SUCCESS {
 		return nil, fmt.Errorf("IORegistryEntryGetParentEntry error=%d", status)
 	}
-	defer i.ioObjectRelease(parent)
+	defer i.iokit.IOObjectRelease(parent)
 
-	if !ioObjectConformsTo(parent, "IOBlockStorageDriver") {
-		//return nil, fmt.Errorf("ERROR: the object is not of the IOBlockStorageDriver class")
+	if !i.iokit.IOObjectConformsTo(parent, "IOBlockStorageDriver") {
+		// return nil, fmt.Errorf("ERROR: the object is not of the IOBlockStorageDriver class")
 		return nil, nil
 	}
 
 	var props unsafe.Pointer
-	if status := i.ioRegistryEntryCreateCFProperties(d, unsafe.Pointer(&props), common.KCFAllocatorDefault, common.KNilOptions); status != common.KERN_SUCCESS {
+	if status := i.iokit.IORegistryEntryCreateCFProperties(d, unsafe.Pointer(&props), common.KCFAllocatorDefault, common.KNilOptions); status != common.KERN_SUCCESS {
 		return nil, fmt.Errorf("IORegistryEntryCreateCFProperties error=%d", status)
 	}
-	defer i.cfRelease(uintptr(props))
+	defer i.corefoundation.CFRelease(uintptr(props))
 
 	key := i.cfStr(kIOBSDNameKey)
-	defer i.cfRelease(uintptr(key))
-	name := i.cfDictionaryGetValue(uintptr(props), uintptr(key))
-	length := cfStringGetLength(uintptr(name)) + 1
-	buf := make([]byte, length-1)
-	cfStringGetCString(uintptr(name), &buf[0], length, common.KCFStringEncodingUTF8)
+	defer i.corefoundation.CFRelease(uintptr(key))
+	name := i.corefoundation.CFDictionaryGetValue(uintptr(props), uintptr(key))
+
+	buf := common.NewCStr(common.GetCFStringBufLengthForUTF8(i.corefoundation.CFStringGetLength(uintptr(name))))
+	i.corefoundation.CFStringGetCString(uintptr(name), buf, buf.Length(), common.KCFStringEncodingUTF8)
 
 	stat, err := i.fillStat(parent)
 	if err != nil {
@@ -244,7 +289,7 @@ func (i *ioCounters) getDriveStat(d uint32) (*IOCountersStat, error) {
 	}
 
 	if stat != nil {
-		stat.Name = string(buf)
+		stat.Name = buf.GoString()
 		return stat, nil
 	}
 	return nil, nil
@@ -252,20 +297,21 @@ func (i *ioCounters) getDriveStat(d uint32) (*IOCountersStat, error) {
 
 func (i *ioCounters) fillStat(d uint32) (*IOCountersStat, error) {
 	var props unsafe.Pointer
-	status := i.ioRegistryEntryCreateCFProperties(d, unsafe.Pointer(&props), common.KCFAllocatorDefault, common.KNilOptions)
+	status := i.iokit.IORegistryEntryCreateCFProperties(d, unsafe.Pointer(&props), common.KCFAllocatorDefault, common.KNilOptions)
 	if status != common.KERN_SUCCESS {
 		return nil, fmt.Errorf("IORegistryEntryCreateCFProperties error=%d", status)
 	}
 	if props == nil {
 		return nil, nil
 	}
-	defer i.cfRelease(uintptr(props))
+	defer i.corefoundation.CFRelease(uintptr(props))
 
 	key := i.cfStr(kIOBlockStorageDriverStatisticsKey)
-	defer i.cfRelease(uintptr(key))
-	v := i.cfDictionaryGetValue(uintptr(props), uintptr(key))
+	defer i.corefoundation.CFRelease(uintptr(key))
+
+	v := i.corefoundation.CFDictionaryGetValue(uintptr(props), uintptr(key))
 	if v == nil {
-		return nil, fmt.Errorf("CFDictionaryGetValue failed")
+		return nil, errors.New("CFDictionaryGetValue failed")
 	}
 
 	var stat IOCountersStat
@@ -280,15 +326,15 @@ func (i *ioCounters) fillStat(d uint32) (*IOCountersStat, error) {
 
 	for key, off := range statstab {
 		s := i.cfStr(key)
-		defer i.cfRelease(uintptr(s))
-		if num := i.cfDictionaryGetValue(uintptr(v), uintptr(s)); num != nil {
-			i.cfNumberGetValue(uintptr(num), common.KCFNumberSInt64Type, uintptr(unsafe.Pointer(uintptr(unsafe.Pointer(&stat))+off)))
+		if num := i.corefoundation.CFDictionaryGetValue(uintptr(v), uintptr(s)); num != nil {
+			i.corefoundation.CFNumberGetValue(uintptr(num), common.KCFNumberSInt64Type, unsafe.Add(unsafe.Pointer(&stat), off))
 		}
+		i.corefoundation.CFRelease(uintptr(s))
 	}
 
 	return &stat, nil
 }
 
 func (i *ioCounters) cfStr(str string) unsafe.Pointer {
-	return i.cfStringCreateWithCString(common.KCFAllocatorDefault, str, common.KCFStringEncodingUTF8)
+	return i.corefoundation.CFStringCreateWithCString(common.KCFAllocatorDefault, str, common.KCFStringEncodingUTF8)
 }

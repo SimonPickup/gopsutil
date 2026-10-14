@@ -5,26 +5,20 @@ package sensors
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"unsafe"
 
 	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
-func TemperaturesWithContext(ctx context.Context) ([]TemperatureStat, error) {
-	ioKit, err := common.NewLibrary(common.IOKit)
-	if err != nil {
-		return nil, err
-	}
-	defer ioKit.Close()
-
-	smc, err := common.NewSMC(ioKit)
+func TemperaturesWithContext(_ context.Context) ([]TemperatureStat, error) {
+	smc, err := common.NewSMC()
 	if err != nil {
 		return nil, err
 	}
 	defer smc.Close()
 
-	var temperatures []TemperatureStat
+	temperatures := make([]TemperatureStat, 0, len(temperatureKeys))
 	for _, key := range temperatureKeys {
 		temperatures = append(temperatures, TemperatureStat{
 			SensorKey:   key,
@@ -112,9 +106,14 @@ func getTemperature(smc *common.SMC, key string) float64 {
 	}
 
 	if result.dataSize == 2 && result.dataType == toUint32(dataTypeSp78) {
-		return 0.0
+		// sp78: signed 7.8 fixed-point — high byte is signed integer degrees,
+		// low byte is fractional part in 1/256 increments.
+		// Previously this branch incorrectly returned 0.0, causing all SMC
+		// temperature sensors on Intel Macs to report 0°C.
+		return float64(int8(result.data[0])) + float64(result.data[1])/256.0
 	}
 
+	// Non-sp78 single-byte readings (legacy/unknown formats)
 	return float64(result.data[0])
 }
 
@@ -129,11 +128,11 @@ func readSMC(smc *common.SMC, key string) (*smcReturn, error) {
 	resultSmc.kSMC = result.result
 
 	if err != nil || result.result != common.KSMCSuccess {
-		return resultSmc, fmt.Errorf("ERROR: IOConnectCallStructMethod failed")
+		return resultSmc, errors.New("ERROR: IOConnectCallStructMethod failed")
 	}
 
 	resultSmc.dataSize = uint32(result.keyInfo.dataSize)
-	resultSmc.dataType = uint32(result.keyInfo.dataSize)
+	resultSmc.dataType = uint32(result.keyInfo.dataType)
 
 	input.keyInfo.dataSize = result.keyInfo.dataSize
 	input.data8 = common.KSMCReadKey
@@ -155,10 +154,10 @@ func callSMC(smc *common.SMC, input *smcParamStruct) (*smcParamStruct, error) {
 	outputCnt := unsafe.Sizeof(*output)
 
 	result := smc.CallStruct(common.KSMCHandleYPCEvent,
-		uintptr(unsafe.Pointer(input)), inputCnt, uintptr(unsafe.Pointer(output)), &outputCnt)
+		unsafe.Pointer(input), inputCnt, unsafe.Pointer(output), &outputCnt)
 
 	if result != 0 {
-		return output, fmt.Errorf("ERROR: IOConnectCallStructMethod failed")
+		return output, errors.New("ERROR: IOConnectCallStructMethod failed")
 	}
 
 	return output, nil
@@ -169,7 +168,7 @@ func toUint32(key string) uint32 {
 		return 0
 	}
 
-	var ans uint32 = 0
+	var ans uint32
 	var shift uint32 = 24
 
 	for i := 0; i < smcKeySize; i++ {

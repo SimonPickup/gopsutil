@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"runtime"
 	"sort"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 var (
 	invoke                 common.Invoker = common.Invoke{}
+	strictIntPtrn                         = regexp.MustCompile(`^\d+$`)
 	ErrorNoChildren                       = errors.New("process does not have children") // Deprecated: ErrorNoChildren is never returned by process.Children(), check its returned []*Process slice length instead
 	ErrorProcessNotRunning                = errors.New("process does not exist")
 	ErrorNotPermitted                     = errors.New("operation not permitted")
@@ -108,12 +110,14 @@ type IOCountersStat struct {
 	// WriteCount is a number of read I/O operations such as syscalls.
 	WriteCount uint64 `json:"writeCount"`
 	// ReadBytes is a number of all I/O read in bytes. This includes disk I/O on Linux and Windows.
+	// Darwin does not expose this and reports 0; use DiskReadBytes there.
 	ReadBytes uint64 `json:"readBytes"`
-	// WriteBytes is a number of all I/O write in bytes. This includes disk I/O on Linux and Windows.
+	// WriteBytes is a number of all I/O written in bytes. This includes disk I/O on Linux and Windows.
+	// Darwin does not expose this and reports 0; use DiskWriteBytes there.
 	WriteBytes uint64 `json:"writeBytes"`
-	// DiskReadBytes is a number of disk I/O write in bytes. Currently only Linux has this value.
+	// DiskReadBytes is a number of disk I/O read in bytes. Currently, Linux and Darwin have this value.
 	DiskReadBytes uint64 `json:"diskReadBytes"`
-	// DiskWriteBytes is a number of disk I/O read in bytes.  Currently only Linux has this value.
+	// DiskWriteBytes is a number of disk I/O written in bytes. Currently, Linux and Darwin have this value.
 	DiskWriteBytes uint64 `json:"diskWriteBytes"`
 }
 
@@ -269,13 +273,11 @@ func (p *Process) PercentWithContext(ctx context.Context, interval time.Duration
 		if err != nil {
 			return 0, err
 		}
-	} else {
-		if p.lastCPUTimes == nil {
-			// invoked first time
-			p.lastCPUTimes = cpuTimes
-			p.lastCPUTime = now
-			return 0, nil
-		}
+	} else if p.lastCPUTimes == nil {
+		// invoked first time
+		p.lastCPUTimes = cpuTimes
+		p.lastCPUTime = now
+		return 0, nil
 	}
 
 	numcpu := runtime.NumCPU()
@@ -326,12 +328,12 @@ func calculatePercent(t1, t2 *cpu.TimesStat, delta float64, numcpu int) float64 
 		return 0
 	}
 	// https://github.com/giampaolo/psutil/blob/c034e6692cf736b5e87d14418a8153bb03f6cf42/psutil/__init__.py#L1064
-	delta_proc := (t2.User - t1.User) + (t2.System - t1.System)
-	if delta_proc <= 0 {
+	deltaProc := (t2.User - t1.User) + (t2.System - t1.System)
+	if deltaProc <= 0 {
 		return 0
 	}
-	overall_percent := ((delta_proc / delta) * 100) * float64(numcpu)
-	return overall_percent
+	overallPercent := ((deltaProc / delta) * 100) * float64(numcpu)
+	return overallPercent
 }
 
 // MemoryPercent returns how many percent of the total RAM this process uses
@@ -361,7 +363,7 @@ func (p *Process) CPUPercent() (float64, error) {
 }
 
 func (p *Process) CPUPercentWithContext(ctx context.Context) (float64, error) {
-	crt_time, err := p.createTimeWithContext(ctx)
+	createTime, err := p.createTimeWithContext(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -371,7 +373,7 @@ func (p *Process) CPUPercentWithContext(ctx context.Context) (float64, error) {
 		return 0, err
 	}
 
-	created := time.Unix(0, crt_time*int64(time.Millisecond))
+	created := time.Unix(0, createTime*int64(time.Millisecond))
 	totalTime := time.Since(created).Seconds()
 	if totalTime <= 0 {
 		return 0, nil
@@ -408,6 +410,11 @@ func (p *Process) Cmdline() (string, error) {
 
 // CmdlineSlice returns the command line arguments of the process as a slice with each
 // element being an argument.
+//
+// On Windows, this assumes the command line is encoded according to the convention accepted by
+// [golang.org/x/sys/windows.CmdlineToArgv] (the most common convention). If this is not suitable,
+// you should instead use [Process.Cmdline] and parse the command line according to your specific
+// requirements.
 func (p *Process) CmdlineSlice() ([]string, error) {
 	return p.CmdlineSliceWithContext(context.Background())
 }

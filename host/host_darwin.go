@@ -4,9 +4,7 @@
 package host
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -20,7 +18,7 @@ import (
 )
 
 // from utmpx.h
-const user_PROCESS = 7
+const user_PROCESS = 7 //nolint:revive //FIXME
 
 func HostIDWithContext(ctx context.Context) (string, error) {
 	out, err := invoke.CommandWithContext(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
@@ -49,7 +47,7 @@ func numProcs(ctx context.Context) (uint64, error) {
 	return uint64(len(procs)), nil
 }
 
-func UsersWithContext(ctx context.Context) ([]UserStat, error) {
+func UsersWithContext(_ context.Context) ([]UserStat, error) {
 	utmpfile := "/var/run/utmpx"
 	var ret []UserStat
 
@@ -65,21 +63,16 @@ func UsersWithContext(ctx context.Context) ([]UserStat, error) {
 	}
 
 	// Skip macOS utmpx header part
-	buf = buf[604:]
+	const ut32Size = int(unsafe.Sizeof(utmpx32{}))
+	buf = buf[ut32Size:]
 
-	u := Utmpx{}
-	entrySize := int(unsafe.Sizeof(u))
-	count := len(buf) / entrySize
+	count := len(buf) / ut32Size
 
-	for i := 0; i < count; i++ {
-		b := buf[i*entrySize : i*entrySize+entrySize]
+	for i := range count {
+		b := buf[i*ut32Size : i*ut32Size+ut32Size]
 
-		var u Utmpx
-		br := bytes.NewReader(b)
-		err := binary.Read(br, binary.LittleEndian, &u)
-		if err != nil {
-			continue
-		}
+		var u utmpx32
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(&u)), len(b)), b)
 		if u.Type != user_PROCESS {
 			continue
 		}
@@ -123,11 +116,11 @@ func PlatformInformationWithContext(ctx context.Context) (string, string, string
 	return platform, family, pver, nil
 }
 
-func VirtualizationWithContext(ctx context.Context) (string, string, error) {
+func VirtualizationWithContext(_ context.Context) (string, string, error) {
 	return "", "", common.ErrNotImplementedError
 }
 
-func KernelVersionWithContext(ctx context.Context) (string, error) {
+func KernelVersionWithContext(_ context.Context) (string, error) {
 	version, err := unix.Sysctl("kern.osrelease")
 	return strings.ToLower(version), err
 }

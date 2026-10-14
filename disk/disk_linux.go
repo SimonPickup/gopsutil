@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -100,6 +101,7 @@ const (
 	AFS_SUPER_MAGIC             = 0x5346414F
 	AUFS_SUPER_MAGIC            = 0x61756673
 	ANON_INODE_FS_SUPER_MAGIC   = 0x09041934
+	BCACHEFS_SUPER_MAGIC        = 0xCA451A4E
 	BPF_FS_MAGIC                = 0xCAFE4A11
 	CEPH_SUPER_MAGIC            = 0x00C36400
 	CGROUP2_SUPER_MAGIC         = 0x63677270
@@ -139,6 +141,7 @@ var fsTypeMap = map[int64]string{
 	ANON_INODE_FS_SUPER_MAGIC: "anon-inode FS", /* 0x09041934 local */
 	AUFS_SUPER_MAGIC:          "aufs",          /* 0x61756673 remote */
 	//	AUTOFS_SUPER_MAGIC:          "autofs",              /* 0x0187 local */
+	BCACHEFS_SUPER_MAGIC:        "bcachefs",            /* 0xCA451A4E local */
 	BEFS_SUPER_MAGIC:            "befs",                /* 0x42465331 local */
 	BDEVFS_MAGIC:                "bdevfs",              /* 0x62646576 local */
 	BFS_MAGIC:                   "bfs",                 /* 0x1BADFACE local */
@@ -242,18 +245,18 @@ func readMountFile(root string) (lines []string, useMounts bool, filename string
 	if err != nil {
 		var pathErr *os.PathError
 		if !errors.As(err, &pathErr) {
-			return
+			return lines, useMounts, filename, err
 		}
 		// if kernel does not support 1/mountinfo, fallback to 1/mounts (<2.6.26)
 		useMounts = true
 		filename = path.Join(root, "mounts")
 		lines, err = common.ReadLines(filename)
 		if err != nil {
-			return
+			return lines, useMounts, filename, err
 		}
-		return
+		return lines, useMounts, filename, err
 	}
-	return
+	return lines, useMounts, filename, err
 }
 
 func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, error) {
@@ -283,82 +286,195 @@ func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, erro
 		return nil, err
 	}
 
+	var ret []PartitionStat
+	if useMounts { // use mounts file
+		ret = parseFieldsOnMounts(lines, all, fs)
+		return ret, nil
+	}
+
+	// use mountinfo
+	ret, err = parseFieldsOnMountinfo(ctx, lines, all, fs, filename)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing mountinfo file %s: %w", filename, err)
+	}
+
+	return ret, nil
+}
+
+func parseFieldsOnMounts(lines []string, all bool, fs []string) []PartitionStat {
 	ret := make([]PartitionStat, 0, len(lines))
-
 	for _, line := range lines {
-		var d PartitionStat
-		if useMounts {
-			fields := strings.Fields(line)
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
 
-			d = PartitionStat{
-				Device:     fields[0],
-				Mountpoint: unescapeFstab(fields[1]),
-				Fstype:     fields[2],
-				Opts:       strings.Fields(fields[3]),
-			}
+		d := PartitionStat{
+			Device:     fields[0],
+			Mountpoint: unescapeFstab(fields[1]),
+			Fstype:     fields[2],
+			Opts:       strings.Split(fields[3], ","),
+		}
 
-			if !all {
-				if d.Device == "none" || !common.StringsHas(fs, d.Fstype) {
-					continue
-				}
-			}
-		} else {
-			// a line of 1/mountinfo has the following structure:
-			// 36  35  98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw,errors=continue
-			// (1) (2) (3)   (4)   (5)      (6)      (7)   (8) (9)   (10)         (11)
-
-			// split the mountinfo line by the separator hyphen
-			parts := strings.Split(line, " - ")
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("found invalid mountinfo line in file %s: %s ", filename, line)
-			}
-
-			fields := strings.Fields(parts[0])
-			blockDeviceID := fields[2]
-			mountPoint := fields[4]
-			mountOpts := strings.Split(fields[5], ",")
-
-			if rootDir := fields[3]; rootDir != "" && rootDir != "/" {
-				mountOpts = append(mountOpts, "bind")
-			}
-
-			fields = strings.Fields(parts[1])
-			fstype := fields[0]
-			device := fields[1]
-
-			d = PartitionStat{
-				Device:     device,
-				Mountpoint: unescapeFstab(mountPoint),
-				Fstype:     fstype,
-				Opts:       mountOpts,
-			}
-
-			if !all {
-				if d.Device == "none" || !common.StringsHas(fs, d.Fstype) {
-					continue
-				}
-			}
-
-			if strings.HasPrefix(d.Device, "/dev/mapper/") {
-				devpath, err := filepath.EvalSymlinks(common.HostDevWithContext(ctx, strings.Replace(d.Device, "/dev", "", 1)))
-				if err == nil {
-					d.Device = devpath
-				}
-			}
-
-			// /dev/root is not the real device name
-			// so we get the real device name from its major/minor number
-			if d.Device == "/dev/root" {
-				devpath, err := os.Readlink(common.HostSysWithContext(ctx, "/dev/block/"+blockDeviceID))
-				if err == nil {
-					d.Device = strings.Replace(d.Device, "root", filepath.Base(devpath), 1)
-				}
+		if !all {
+			if d.Device == "none" || !common.StringsHas(fs, d.Fstype) {
+				continue
 			}
 		}
 		ret = append(ret, d)
 	}
 
+	return ret
+}
+
+func parseFieldsOnMountinfo(ctx context.Context, lines []string, all bool, fs []string, filename string) ([]PartitionStat, error) {
+	ret := make([]PartitionStat, 0, len(lines))
+	seenDevIDs := make(map[string]string)
+
+	for _, line := range lines {
+		// See proc_pid_mountinfo(5) (proc(5) on EL)
+		// A line of <filename> (<procfs root>/<pid>/mountinfo) has the following structure:
+		//	36  35  98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw,errors=continue
+		//	(1) (2) (3)   (4)   (5)      (6)      (7)   (8) (9)   (10)         (11)
+		// Documentation is unclear if (6) is optional/may not be present, so it is conditionally parsed if present.
+		// (7) is optional and may not be present, but this function does not currently use it.
+		// Documentation is unclear if (11) is optional or not but this function does not currently use it.
+
+		// split the mountinfo line by the separator hyphen (`(8)` above)
+		parts := strings.SplitN(line, " - ", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("found invalid mountinfo line in file %s (bad parts len): %s ", filename, line)
+		}
+
+		fields := strings.Fields(parts[0])
+		if len(fields) < 5 { // field (7) is optional, field (6) may(?) be optional
+			return nil, fmt.Errorf("found invalid mountinfo line in file %s (bad fields(1) len): %s ", filename, line)
+		}
+		blockDeviceID := fields[2]
+		rootDir := fields[3]
+		mountPoint := fields[4]
+		mountOpts := []string{}
+		if len(fields) >= 6 {
+			mountOpts = strings.Split(fields[5], ",")
+		}
+		fields = strings.Fields(parts[1])
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("found invalid mountinfo line in file %s (bad fields(2) len): %s ", filename, line)
+		}
+		fsType := fields[0]
+		mntSrc := fields[1]
+		superOpts := []string{}
+		if len(fields) >= 3 {
+			superOpts = strings.Split(fields[2], ",")
+		}
+		// Since Linux 2.6.16, read-only can be set independently on the
+		// mount point and the filesystem superblock. The mount is writable
+		// only when both option sets are read-write.
+		mountOpts = effectiveMountOpts(mountOpts, superOpts)
+		isBind := false
+		// When !all, keep only real filesystems (non-"nodev" entries of
+		// /proc/filesystems plus zfs), as parseFieldsOnMounts() does.
+		if !all && !common.StringsHas(fs, fsType) {
+			continue
+		}
+		// Some virtual/non-storage filesystems do still have real sources (e.g. nsfs binds),
+		// but need to use the "root" field (field 4) instead of the "source" field (field 10).
+		// The "source" field is actually "*filesystem-specific" information".
+		device := rootDir
+		if strings.HasPrefix(mntSrc, "/") {
+			device = mntSrc
+		} else if rootDir == "/" {
+			device = mntSrc
+		}
+
+		// Track device paths by block device ID to resolve bind mounts.
+		// A bind mount is identified by rootDir != "/" (mounting a subdirectory of a filesystem).
+		// Only apply bind detection for storage-backed filesystems (mntSrc starts with "/"),
+		// since virtual filesystems (e.g. nsfs) use rootDir for non-path identifiers.
+		if firstDev, ok := seenDevIDs[blockDeviceID]; ok {
+			// Same block device seen before - use the original device path.
+			device = firstDev
+		}
+		// A btrfs subvolume mount has rootDir == its subvol= value and is not a
+		// bind; a bind of a subdirectory has a deeper rootDir than subvol=.
+		isSubvol := false
+		for _, o := range superOpts {
+			if v, ok := strings.CutPrefix(o, "subvol="); ok {
+				isSubvol = rootDir == v
+				break
+			}
+		}
+		if strings.HasPrefix(mntSrc, "/") && rootDir != "/" && !isSubvol {
+			isBind = true
+			mountOpts = append(mountOpts, "bind")
+		}
+		if _, ok := seenDevIDs[blockDeviceID]; !ok {
+			seenDevIDs[blockDeviceID] = device
+		}
+
+		if !all && isBind {
+			continue
+		}
+
+		d := PartitionStat{
+			Device:     device,
+			Mountpoint: unescapeFstab(mountPoint),
+			Fstype:     fsType,
+			Opts:       mountOpts,
+		}
+
+		if strings.HasPrefix(d.Device, "/dev/mapper/") {
+			devpath, err := filepath.EvalSymlinks(common.HostDevWithContext(ctx, strings.Replace(d.Device, "/dev", "", 1)))
+			if err == nil {
+				d.Device = devpath
+			}
+		}
+
+		// /dev/root is not the real device name
+		// so we get the real device name from its major/minor number
+		if d.Device == "/dev/root" {
+			devpath, err := os.Readlink(common.HostSysWithContext(ctx, "/dev/block/"+blockDeviceID))
+			if err == nil {
+				d.Device = strings.Replace(d.Device, "root", filepath.Base(devpath), 1)
+			}
+		}
+		ret = append(ret, d)
+	}
 	return ret, nil
+}
+
+func effectiveMountOpts(mountOpts, superOpts []string) []string {
+	mode := effectiveReadWriteMode(mountOpts, superOpts)
+	if mode == "" {
+		return mountOpts
+	}
+
+	updated := make([]string, 0, len(mountOpts)+1)
+	modeSet := false
+	for _, opt := range mountOpts {
+		if opt == "ro" || opt == "rw" {
+			if !modeSet {
+				updated = append(updated, mode)
+				modeSet = true
+			}
+			continue
+		}
+		updated = append(updated, opt)
+	}
+	if !modeSet {
+		updated = append([]string{mode}, updated...)
+	}
+	return updated
+}
+
+func effectiveReadWriteMode(mountOpts, superOpts []string) string {
+	if slices.Contains(mountOpts, "ro") || slices.Contains(superOpts, "ro") {
+		return "ro"
+	}
+	if slices.Contains(mountOpts, "rw") && slices.Contains(superOpts, "rw") {
+		return "rw"
+	}
+	return ""
 }
 
 // getFileSystems returns supported filesystems from /proc/filesystems
@@ -476,15 +592,16 @@ func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOC
 		// Since `name` here is already a basename, re-add the /dev path.
 		// This is not ideal, but we may break the API by changing how SerialNumberWithContext
 		// works.
-		d.SerialNumber, _ = SerialNumberWithContext(ctx, common.HostDevWithContext(ctx, name))
-		d.Label, _ = LabelWithContext(ctx, name)
+		deviceName := getDeviceName(name)
+		d.SerialNumber, _ = SerialNumberWithContext(ctx, common.HostDevWithContext(ctx, deviceName))
+		d.Label, _ = LabelWithContext(ctx, deviceName)
 
 		ret[name] = d
 	}
 	return ret, nil
 }
 
-func udevData(ctx context.Context, major uint32, minor uint32, name string) (string, error) {
+func udevData(ctx context.Context, major, minor uint32, name string) (string, error) {
 	udevDataPath := common.HostRunWithContext(ctx, fmt.Sprintf("udev/data/b%d:%d", major, minor))
 	if f, err := os.Open(udevDataPath); err == nil {
 		defer f.Close()
@@ -528,10 +645,10 @@ func SerialNumberWithContext(ctx context.Context, name string) (string, error) {
 
 func LabelWithContext(ctx context.Context, name string) (string, error) {
 	// Try label based on devicemapper name
-	dmname_filename := common.HostSysWithContext(ctx, fmt.Sprintf("block/%s/dm/name", name))
+	dmnameFilename := common.HostSysWithContext(ctx, fmt.Sprintf("block/%s/dm/name", name))
 	// Could errors.Join errs with Go >= 1.20
-	if common.PathExists(dmname_filename) {
-		dmname, err := os.ReadFile(dmname_filename)
+	if common.PathExists(dmnameFilename) {
+		dmname, err := os.ReadFile(dmnameFilename)
 		if err == nil {
 			return strings.TrimSpace(string(dmname)), nil
 		}
@@ -558,4 +675,24 @@ func getFsType(stat unix.Statfs_t) string {
 		return ""
 	}
 	return ret
+}
+
+// getDeviceName normalizes NVMe device names by converting controller notation
+// from diskstats format (nvmeXcYnZ) to actual device format (nvmeXnZ).
+// This handles the discrepancy where /proc/diskstats reports nvmeXcYnZ
+// but actual device files exist as /dev/nvmeXnZ.
+func getDeviceName(name string) string {
+	if !strings.HasPrefix(name, "nvme") {
+		return name
+	}
+
+	// Look for controller notation pattern: nvmeXcYnZ
+	if cIdx := strings.Index(name, "c"); cIdx > 4 { // "nvme" is 4 chars
+		if nIdx := strings.Index(name[cIdx:], "n"); nIdx > 0 {
+			// Convert nvmeXcYnZ to nvmeXnZ by removing "cY" part
+			return name[:cIdx] + name[cIdx+nIdx:]
+		}
+	}
+
+	return name
 }

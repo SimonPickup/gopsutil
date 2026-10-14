@@ -1,5 +1,15 @@
-on: [push, pull_request]
 name: Build Test
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -12,7 +22,7 @@ jobs:
       - id: versions
         run: |
           versions=$(curl -s 'https://go.dev/dl/?mode=json' | jq -c 'map(.version[2:])')
-          echo "::set-output name=value::${versions}"
+          echo "value=${versions}"  >> $GITHUB_OUTPUT
   build_test:
     needs: go-versions
     strategy:
@@ -21,24 +31,12 @@ jobs:
         go-version: ${{fromJson(needs.go-versions.outputs.versions)}}
     runs-on: ubuntu-22.04
     steps:
-    - name: Install Go
-      uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
-      with:
-        go-version: ${{ matrix.go-version }}
-    - name: Checkout code
-      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
-    - id: cache-paths
-      run: |
-        echo "::set-output name=cache::$(go env GOCACHE)"
-        echo "::set-output name=mod-cache::$(go env GOMODCACHE)"
-    - name: Cache go modules
-      uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9 # v4.0.2
-      with:
-        path: |
-          ${{ steps.cache-paths.outputs.cache }}
-          ${{ steps.cache-paths.outputs.mod-cache }}
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: ${{ runner.os }}-go-
-    - name: Build Test v3
-      run: |
-        make build_test
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Build Test v3
+        run: |
+          make build_test

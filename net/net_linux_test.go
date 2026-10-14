@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/shirou/gopsutil/v4/internal/common"
 )
@@ -20,7 +21,7 @@ func TestIOCountersByFileParsing(t *testing.T) {
 	tmpfile, err := os.CreateTemp("", "proc_dev_net")
 	defer os.Remove(tmpfile.Name()) // clean up
 
-	assert.Nil(t, err, "Temporary file creation failed: ", err)
+	require.NoErrorf(t, err, "Temporary file creation failed: %s", err)
 
 	cases := [4][2]string{
 		{"eth0:   ", "eth1:   "},
@@ -30,7 +31,7 @@ func TestIOCountersByFileParsing(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		err = tmpfile.Truncate(0)
-		assert.Nil(t, err, "Temporary file truncating problem: ", err)
+		require.NoErrorf(t, err, "Temporary file truncating problem: %s", err)
 
 		// Parse interface name for assertion
 		interface0 := strings.TrimSpace(testCase[0])
@@ -44,13 +45,13 @@ func TestIOCountersByFileParsing(t *testing.T) {
 
 		// Write /proc/net/dev sample output
 		_, err = tmpfile.Write(proc)
-		assert.Nil(t, err, "Temporary file writing failed: ", err)
+		require.NoErrorf(t, err, "Temporary file writing failed: %s", err)
 
 		counters, err := IOCountersByFile(true, tmpfile.Name())
 
-		assert.Nil(t, err)
+		require.NoError(t, err)
 		assert.NotEmpty(t, counters)
-		assert.Equal(t, 2, len(counters))
+		assert.Len(t, counters, 2)
 		assert.Equal(t, interface0, counters[0].Name)
 		assert.Equal(t, uint64(1), counters[0].BytesRecv)
 		assert.Equal(t, uint64(2), counters[0].PacketsRecv)
@@ -75,13 +76,13 @@ func TestIOCountersByFileParsing(t *testing.T) {
 		assert.Equal(t, uint64(1300), counters[1].Fifoout)
 	}
 
-	err = tmpfile.Close()
-	assert.Nil(t, err, "Temporary file closing failed: ", err)
+	assert.NoErrorf(t, tmpfile.Close(), "Temporary file closing failed")
 }
 
 func TestGetProcInodesAll(t *testing.T) {
 	waitForServer := make(chan bool)
 	go func(t *testing.T) { // TCP listening goroutine to have some opened inodes even in CI
+		t.Helper()
 		addr, err := net.ResolveTCPAddr("tcp", "localhost:0") // dynamically get a random open port from OS
 		if err != nil {
 			t.Skipf("unable to resolve localhost: %v", err)
@@ -102,9 +103,10 @@ func TestGetProcInodesAll(t *testing.T) {
 	}(t)
 	<-waitForServer
 
-	root := common.HostProcWithContext(context.Background(), "")
-	v, err := getProcInodesAll(root, 0)
-	assert.Nil(t, err)
+	ctx := context.Background()
+	root := common.HostProcWithContext(ctx, "")
+	v, err := getProcInodesAllWithContext(ctx, root, 0)
+	require.NoError(t, err)
 	assert.NotEmpty(t, v)
 }
 
@@ -115,7 +117,7 @@ func TestConnectionsMax(t *testing.T) {
 
 	maxConn := 10
 	v, err := ConnectionsMax("tcp", maxConn)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.NotEmpty(t, v)
 
 	cxByPid := map[int32]int{}
@@ -125,7 +127,7 @@ func TestConnectionsMax(t *testing.T) {
 		}
 	}
 	for _, c := range cxByPid {
-		assert.True(t, c <= maxConn)
+		assert.LessOrEqual(t, c, maxConn)
 	}
 }
 
@@ -136,8 +138,6 @@ type AddrTest struct {
 }
 
 func TestDecodeAddress(t *testing.T) {
-	assert := assert.New(t)
-
 	addr := map[string]AddrTest{
 		"11111:0035": {
 			Error: true,
@@ -180,13 +180,121 @@ func TestDecodeAddress(t *testing.T) {
 		}
 		addr, err := decodeAddress(uint32(family), src)
 		if dst.Error {
-			assert.NotNil(err, src)
+			assert.Errorf(t, err, src)
 		} else {
-			assert.Nil(err, src)
-			assert.Equal(dst.IP, addr.IP, src)
-			assert.Equal(dst.Port, int(addr.Port), src)
+			require.NoErrorf(t, err, src)
+			assert.Equalf(t, dst.IP, addr.IP, src)
+			assert.Equalf(t, dst.Port, int(addr.Port), src)
 		}
 	}
+}
+
+func TestConnectionDedupKey(t *testing.T) {
+	// Two unnamed UNIX sockets with different pid/fd should have different keys
+	c1 := connTmp{
+		fd:       3,
+		family:   syscall.AF_UNIX,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{},
+		raddr:    Addr{},
+		status:   "NONE",
+		pid:      100,
+	}
+	c2 := connTmp{
+		fd:       4,
+		family:   syscall.AF_UNIX,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{},
+		raddr:    Addr{},
+		status:   "NONE",
+		pid:      100,
+	}
+	c3 := connTmp{
+		fd:       3,
+		family:   syscall.AF_UNIX,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{},
+		raddr:    Addr{},
+		status:   "NONE",
+		pid:      200,
+	}
+
+	k1 := connectionDedupKey(syscall.AF_UNIX, c1)
+	k2 := connectionDedupKey(syscall.AF_UNIX, c2)
+	k3 := connectionDedupKey(syscall.AF_UNIX, c3)
+
+	assert.NotEqual(t, k1, k2, "different fd same pid should produce different keys")
+	assert.NotEqual(t, k1, k3, "same fd different pid should produce different keys")
+
+	// Same unnamed UNIX socket should produce the same key
+	assert.Equal(t, k1, connectionDedupKey(syscall.AF_UNIX, c1))
+
+	// Named UNIX sockets with different paths should have different keys
+	c4 := connTmp{
+		fd:       3,
+		family:   syscall.AF_UNIX,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{IP: "/var/run/a.sock"},
+		raddr:    Addr{},
+		status:   "NONE",
+		pid:      100,
+	}
+	c5 := connTmp{
+		fd:       3,
+		family:   syscall.AF_UNIX,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{IP: "/var/run/b.sock"},
+		raddr:    Addr{},
+		status:   "NONE",
+		pid:      100,
+	}
+	assert.NotEqual(t, connectionDedupKey(syscall.AF_UNIX, c4), connectionDedupKey(syscall.AF_UNIX, c5))
+
+	// Inet sockets: same tuple should produce the same key regardless of pid/fd
+	c6 := connTmp{
+		fd:       3,
+		family:   syscall.AF_INET,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{IP: "127.0.0.1", Port: 8080},
+		raddr:    Addr{IP: "10.0.0.1", Port: 443},
+		status:   "ESTABLISHED",
+		pid:      100,
+	}
+	c7 := connTmp{
+		fd:       5,
+		family:   syscall.AF_INET,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{IP: "127.0.0.1", Port: 8080},
+		raddr:    Addr{IP: "10.0.0.1", Port: 443},
+		status:   "ESTABLISHED",
+		pid:      200,
+	}
+	assert.Equal(t, connectionDedupKey(syscall.AF_INET, c6), connectionDedupKey(syscall.AF_INET, c7),
+		"inet sockets with same tuple should dedup regardless of pid/fd")
+
+	// When pid/fd are unknown (0/0), inode should distinguish sockets
+	c8 := connTmp{
+		fd:       0,
+		family:   syscall.AF_UNIX,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{},
+		raddr:    Addr{},
+		status:   "NONE",
+		pid:      0,
+		inode:    "111",
+	}
+	c9 := connTmp{
+		fd:       0,
+		family:   syscall.AF_UNIX,
+		sockType: syscall.SOCK_STREAM,
+		laddr:    Addr{},
+		raddr:    Addr{},
+		status:   "NONE",
+		pid:      0,
+		inode:    "222",
+	}
+	assert.NotEqual(t, connectionDedupKey(syscall.AF_UNIX, c8), connectionDedupKey(syscall.AF_UNIX, c9),
+		"unnamed unix sockets with unknown pid/fd should use inode in dedup key")
 }
 
 func TestReverse(t *testing.T) {
@@ -197,7 +305,7 @@ func TestReverse(t *testing.T) {
 func TestConntrackStatFileParsing(t *testing.T) {
 	tmpfile, err := os.CreateTemp("", "proc_net_stat_conntrack")
 	defer os.Remove(tmpfile.Name())
-	assert.Nil(t, err, "Temporary file creation failed: ", err)
+	require.NoErrorf(t, err, "Temporary file creation failed: %s", err)
 
 	data := []byte(`
 entries  searched found new invalid ignore delete deleteList insert insertFailed drop earlyDrop icmpError  expectNew expectCreate expectDelete searchRestart
@@ -246,12 +354,12 @@ entries  searched found new invalid ignore delete deleteList insert insertFailed
 
 	// Write data to tempfile
 	_, err = tmpfile.Write(data)
-	assert.Nil(t, err, "Temporary file writing failed: ", err)
+	require.NoErrorf(t, err, "Temporary file writing failed: %s", err)
 
 	// Function under test
 	stats, err := conntrackStatsFromFile(tmpfile.Name(), true)
-	assert.Nil(t, err)
-	assert.Equal(t, 8, len(stats), "Expected 8 results")
+	require.NoError(t, err)
+	assert.Lenf(t, stats, 8, "Expected 8 results")
 
 	summary := &ConntrackStat{}
 	for i, exp := range slist.Items() {
@@ -311,7 +419,7 @@ entries  searched found new invalid ignore delete deleteList insert insertFailed
 
 	// Test summary grouping
 	totals, err := conntrackStatsFromFile(tmpfile.Name(), false)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	for i, st := range totals {
 		assert.Equal(t, summary.Entries, st.Entries)
 		assert.Equal(t, summary.Searched, st.Searched)

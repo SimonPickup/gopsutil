@@ -15,6 +15,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFillFromfdWithContext(t *testing.T) {
+	type expect struct {
+		numFDs    int32
+		openFiles []OpenFilesStat
+		err       error
+	}
+	type testCase struct {
+		name     string
+		pid      int32
+		expected *expect
+	}
+
+	cases := []testCase{
+		{
+			name: "good path",
+			pid:  1,
+			expected: &expect{
+				numFDs: 3,
+				openFiles: []OpenFilesStat{
+					{
+						Path: "/foo",
+						Fd:   0,
+					},
+					{
+						Path: "/bar",
+						Fd:   1,
+					},
+					{
+						Path: "/baz",
+						Fd:   2,
+					},
+				},
+			},
+		},
+	}
+
+	t.Setenv("HOST_PROC", "testdata/linux")
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := NewProcess(tt.pid)
+			require.NoError(t, err)
+			numFDs, openFiles, err := p.fillFromfdWithContext(context.TODO())
+			if tt.expected.err != nil {
+				assert.ErrorContains(t, err, tt.expected.err.Error())
+				return
+			}
+
+			//nolint:testifylint // false positive
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected.numFDs, numFDs)
+			assert.ElementsMatch(t, tt.expected.openFiles, openFiles)
+		})
+	}
+}
+
 func TestSplitProcStat(t *testing.T) {
 	expectedFieldsNum := 53
 	statLineContent := make([]string, expectedFieldsNum-1)
@@ -41,13 +96,13 @@ func TestSplitProcStat(t *testing.T) {
 	for _, expectedName := range cases {
 		statLineContent[commandNameIndex-1] = "(" + expectedName + ")"
 		statLine := strings.Join(statLineContent, " ")
-		t.Run(fmt.Sprintf("name: %s", expectedName), func(t *testing.T) {
+		t.Run("name: "+expectedName, func(t *testing.T) {
 			parsedStatLine := splitProcStat([]byte(statLine))
 			assert.Equal(t, expectedName, parsedStatLine[commandNameIndex])
 			for _, idx := range consideredFields {
 				expected := strconv.Itoa(idx)
 				parsed := parsedStatLine[idx]
-				assert.Equal(
+				assert.Equalf(
 					t, expected, parsed,
 					"field %d (index from 1 as in man proc) must be %q but %q is received",
 					idx, expected, parsed,
@@ -57,11 +112,29 @@ func TestSplitProcStat(t *testing.T) {
 	}
 }
 
+func TestSplitProcStat_malformed(t *testing.T) {
+	// Malformed/truncated stat contents must not panic; splitProcStat
+	// returns nil so callers' field-count checks can reject them.
+	cases := []string{
+		"",             // empty
+		"123",          // no parentheses
+		"123 name S 4", // no parentheses, plain fields
+		"123 (name",    // missing closing paren
+		"name) S 4",    // missing opening paren
+		"123 (name)",   // ')' as final byte, no trailing fields
+	}
+	for _, content := range cases {
+		t.Run(content, func(t *testing.T) {
+			assert.NotPanics(t, func() {
+				_ = splitProcStat([]byte(content))
+			})
+		})
+	}
+}
+
 func TestSplitProcStat_fromFile(t *testing.T) {
 	pids, err := os.ReadDir("testdata/linux/")
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 	t.Setenv("HOST_PROC", "testdata/linux")
 	for _, pid := range pids {
 		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
@@ -73,31 +146,29 @@ func TestSplitProcStat_fromFile(t *testing.T) {
 			continue
 		}
 		contents, err := os.ReadFile(statFile)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		pidStr := strconv.Itoa(int(pid))
 
 		ppid := "68044" // TODO: how to pass ppid to test?
 
 		fields := splitProcStat(contents)
-		assert.Equal(t, fields[1], pidStr)
-		assert.Equal(t, fields[2], "test(cmd).sh")
-		assert.Equal(t, fields[3], "S")
-		assert.Equal(t, fields[4], ppid)
-		assert.Equal(t, fields[5], pidStr) // pgrp
-		assert.Equal(t, fields[6], ppid)   // session
-		assert.Equal(t, fields[8], pidStr) // tpgrp
-		assert.Equal(t, fields[18], "20")  // priority
-		assert.Equal(t, fields[20], "1")   // num threads
-		assert.Equal(t, fields[52], "0")   // exit code
+		assert.Equal(t, pidStr, fields[1])
+		assert.Equal(t, "test(cmd).sh", fields[2])
+		assert.Equal(t, "S", fields[3])
+		assert.Equal(t, ppid, fields[4])
+		assert.Equal(t, pidStr, fields[5]) // pgrp
+		assert.Equal(t, ppid, fields[6])   // session
+		assert.Equal(t, pidStr, fields[8]) // tpgrp
+		assert.Equal(t, "20", fields[18])  // priority
+		assert.Equal(t, "1", fields[20])   // num threads
+		assert.Equal(t, "0", fields[52])   // exit code
 	}
 }
 
 func TestFillFromCommWithContext(t *testing.T) {
 	pids, err := os.ReadDir("testdata/linux/")
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 	t.Setenv("HOST_PROC", "testdata/linux")
 	for _, pid := range pids {
 		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
@@ -108,17 +179,13 @@ func TestFillFromCommWithContext(t *testing.T) {
 			continue
 		}
 		p, _ := NewProcess(int32(pid))
-		if err := p.fillFromCommWithContext(context.Background()); err != nil {
-			t.Error(err)
-		}
+		assert.NoError(t, p.fillFromCommWithContext(context.Background()))
 	}
 }
 
 func TestFillFromStatusWithContext(t *testing.T) {
 	pids, err := os.ReadDir("testdata/linux/")
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 	t.Setenv("HOST_PROC", "testdata/linux")
 	for _, pid := range pids {
 		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
@@ -129,9 +196,7 @@ func TestFillFromStatusWithContext(t *testing.T) {
 			continue
 		}
 		p, _ := NewProcess(int32(pid))
-		if err := p.fillFromStatus(); err != nil {
-			t.Error(err)
-		}
+		assert.NoError(t, p.fillFromStatus())
 	}
 }
 
@@ -155,9 +220,7 @@ func Benchmark_fillFromStatusWithContext(b *testing.B) {
 
 func TestFillFromTIDStatWithContext_lx_brandz(t *testing.T) {
 	pids, err := os.ReadDir("testdata/lx_brandz/")
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 	t.Setenv("HOST_PROC", "testdata/lx_brandz")
 	for _, pid := range pids {
 		pid, err := strconv.ParseInt(pid.Name(), 0, 32)
@@ -169,10 +232,8 @@ func TestFillFromTIDStatWithContext_lx_brandz(t *testing.T) {
 		}
 		p, _ := NewProcess(int32(pid))
 		_, _, cpuTimes, _, _, _, _, err := p.fillFromTIDStat(-1)
-		if err != nil {
-			t.Error(err)
-		}
-		assert.Equal(t, float64(0), cpuTimes.Iowait)
+		require.NoError(t, err)
+		assert.Zero(t, cpuTimes.Iowait)
 	}
 }
 

@@ -11,11 +11,7 @@ import (
 	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
-func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOCountersStat, error) {
-	return nil, common.ErrNotImplementedError
-}
-
-func LabelWithContext(ctx context.Context, name string) (string, error) {
+func LabelWithContext(_ context.Context, _ string) (string, error) {
 	return "", common.ErrNotImplementedError
 }
 
@@ -27,6 +23,10 @@ func SerialNumberWithContext(ctx context.Context, name string) (string, error) {
 	if strings.HasPrefix(name, "/dev/") {
 		return "", errors.New("devices on /dev are not physical disks on aix")
 	}
+	// Reject names that would be interpreted as command-line options by lscfg.
+	if strings.HasPrefix(name, "-") {
+		return "", errors.New("invalid device name")
+	}
 	out, err := invoke.CommandWithContext(ctx, "lscfg", "-vl", name)
 	if err != nil {
 		return "", err
@@ -34,7 +34,7 @@ func SerialNumberWithContext(ctx context.Context, name string) (string, error) {
 
 	ret := ""
 	// Kind of inefficient, but it works
-	lines := strings.Split(string(out[:]), "\n")
+	lines := strings.Split(string(out), "\n")
 	for line := 1; line < len(lines); line++ {
 		v := strings.TrimSpace(lines[line])
 		if strings.HasPrefix(v, "Serial Number...............") {

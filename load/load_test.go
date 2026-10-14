@@ -3,29 +3,23 @@ package load
 
 import (
 	"errors"
-	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
-func skipIfNotImplementedErr(t testing.TB, err error) {
+func TestAvg(t *testing.T) {
+	v, err := Avg()
 	if errors.Is(err, common.ErrNotImplementedError) {
 		t.Skip("not implemented")
 	}
-}
-
-func TestAvg(t *testing.T) {
-	v, err := Avg()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
-	}
+	require.NoError(t, err)
 
 	empty := &AvgStat{}
-	if v == empty {
-		t.Errorf("error load: %v", v)
-	}
+	assert.NotSamef(t, v, empty, "error load: %v", v)
 	t.Log(v)
 }
 
@@ -36,23 +30,19 @@ func TestAvgStat_String(t *testing.T) {
 		Load15: 30.1,
 	}
 	e := `{"load1":10.1,"load5":20.1,"load15":30.1}`
-	if e != fmt.Sprintf("%v", v) {
-		t.Errorf("LoadAvgStat string is invalid: %v", v)
-	}
+	assert.JSONEqf(t, e, v.String(), "LoadAvgStat string is invalid: %v", v)
 	t.Log(e)
 }
 
 func TestMisc(t *testing.T) {
 	v, err := Misc()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoError(t, err)
 
 	empty := &MiscStat{}
-	if v == empty {
-		t.Errorf("error load: %v", v)
-	}
+	assert.NotSamef(t, v, empty, "error load: %v", v)
 	t.Log(v)
 }
 
@@ -65,23 +55,20 @@ func TestMiscStatString(t *testing.T) {
 		Ctxt:         3,
 	}
 	e := `{"procsTotal":4,"procsCreated":5,"procsRunning":1,"procsBlocked":2,"ctxt":3}`
-	if e != fmt.Sprintf("%v", v) {
-		t.Errorf("TestMiscString string is invalid: %v", v)
-	}
+	assert.JSONEqf(t, e, v.String(), "TestMiscString string is invalid: %v", v)
 	t.Log(e)
 }
 
 func BenchmarkLoad(b *testing.B) {
-	loadAvg := func(t testing.TB) {
+	loadAvg := func(tb testing.TB) {
+		tb.Helper()
 		v, err := Avg()
-		skipIfNotImplementedErr(t, err)
-		if err != nil {
-			t.Errorf("error %v", err)
+		if errors.Is(err, common.ErrNotImplementedError) {
+			tb.Skip("not implemented")
 		}
+		require.NoErrorf(tb, err, "error %v", err)
 		empty := &AvgStat{}
-		if v == empty {
-			t.Errorf("error load: %v", v)
-		}
+		assert.NotSamef(tb, v, empty, "error load: %v", v)
 	}
 
 	b.Run("FirstCall", func(b *testing.B) {

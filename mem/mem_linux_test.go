@@ -5,21 +5,23 @@ package mem
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
 func TestExVirtualMemory(t *testing.T) {
 	ex := NewExLinux()
 
 	v, err := ex.VirtualMemory()
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 
 	t.Log(v)
 }
@@ -27,13 +29,14 @@ func TestExVirtualMemory(t *testing.T) {
 var virtualMemoryTests = []struct {
 	mockedRootFS string
 	stat         *VirtualMemoryStat
+	exStat       *ExVirtualMemory
 }{
 	{
 		"intelcorei5", &VirtualMemoryStat{
 			Total:          16502300672,
 			Available:      11495358464,
-			Used:           3437277184,
-			UsedPercent:    20.82907863769651,
+			Used:           5006942208,
+			UsedPercent:    30.340873721295385,
 			Free:           8783491072,
 			Active:         4347392000,
 			Inactive:       2938834944,
@@ -68,13 +71,22 @@ var virtualMemoryTests = []struct {
 			HugePagesSurp:  0,
 			HugePageSize:   2097152,
 		},
+		&ExVirtualMemory{
+			ActiveFile:   1121992 * 1024,
+			InactiveFile: 1683344 * 1024,
+			ActiveAnon:   3123508 * 1024,
+			InactiveAnon: 1186612 * 1024,
+			Unevictable:  32 * 1024,
+			Percpu:       19136 * 1024,
+			KernelStack:  14224 * 1024,
+		},
 	},
 	{
 		"issue1002", &VirtualMemoryStat{
 			Total:          260579328,
 			Available:      215199744,
-			Used:           34328576,
-			UsedPercent:    13.173944481121694,
+			Used:           45379584,
+			UsedPercent:    17.414882580401773,
 			Free:           124506112,
 			Active:         108785664,
 			Inactive:       8581120,
@@ -109,6 +121,15 @@ var virtualMemoryTests = []struct {
 			HugePagesSurp:  0,
 			HugePageSize:   0,
 		},
+		&ExVirtualMemory{
+			ActiveFile:   88280 * 1024,
+			InactiveFile: 8380 * 1024,
+			ActiveAnon:   17956 * 1024,
+			InactiveAnon: 0,
+			Unevictable:  0,
+			Percpu:       0,
+			KernelStack:  624 * 1024,
+		},
 	},
 	{
 		"anonhugepages", &VirtualMemoryStat{
@@ -116,8 +137,16 @@ var virtualMemoryTests = []struct {
 			Available:     127880216 * 1024,
 			Free:          119443248 * 1024,
 			AnonHugePages: 50409472 * 1024,
-			Used:          144748720128,
-			UsedPercent:   54.20110673559013,
+			Used:          136109264896,
+			UsedPercent:   50.96606579876596,
+		},
+		&ExVirtualMemory{
+			ActiveFile:   0,
+			InactiveFile: 0,
+			ActiveAnon:   0,
+			InactiveAnon: 0,
+			Unevictable:  0,
+			Percpu:       0,
 		},
 	},
 }
@@ -125,16 +154,30 @@ var virtualMemoryTests = []struct {
 func TestVirtualMemoryLinux(t *testing.T) {
 	for _, tt := range virtualMemoryTests {
 		t.Run(tt.mockedRootFS, func(t *testing.T) {
-			t.Setenv("HOST_PROC", filepath.Join("testdata/linux/virtualmemory/", tt.mockedRootFS, "proc"))
+			t.Setenv("HOST_PROC", filepath.Join("testdata", "linux", "virtualmemory", tt.mockedRootFS, "proc"))
 
 			stat, err := VirtualMemory()
-			skipIfNotImplementedErr(t, err)
-			if err != nil {
-				t.Errorf("error %v", err)
+			if errors.Is(err, common.ErrNotImplementedError) {
+				t.Skip("not implemented")
 			}
-			if !reflect.DeepEqual(stat, tt.stat) {
-				t.Errorf("got: %+v\nwant: %+v", stat, tt.stat)
+			require.NoError(t, err)
+			assert.Truef(t, reflect.DeepEqual(stat, tt.stat), "got: %+v\nwant: %+v", stat, tt.stat)
+		})
+	}
+}
+
+func TestExVirtualMemoryLinux(t *testing.T) {
+	for _, tt := range virtualMemoryTests {
+		t.Run(tt.mockedRootFS, func(t *testing.T) {
+			t.Setenv("HOST_PROC", filepath.Join("testdata", "linux", "virtualmemory", tt.mockedRootFS, "proc"))
+
+			ex := NewExLinux()
+			exStat, err := ex.VirtualMemory()
+			if errors.Is(err, common.ErrNotImplementedError) {
+				t.Skip("not implemented")
 			}
+			require.NoError(t, err)
+			assert.Truef(t, reflect.DeepEqual(exStat, tt.exStat), "got: %+v\nwant: %+v", exStat, tt.exStat)
 		})
 	}
 }
@@ -150,21 +193,20 @@ const invalidFile = `INVALID				Type		Size		Used		Priority
 `
 
 func TestParseSwapsFile_ValidFile(t *testing.T) {
-	assert := assert.New(t)
 	stats, err := parseSwapsFile(context.Background(), strings.NewReader(validFile))
-	assert.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal(*stats[0], SwapDevice{
+	assert.Equal(t, SwapDevice{
 		Name:      "/dev/dm-2",
 		UsedBytes: 502566912,
 		FreeBytes: 68128825344,
-	})
+	}, *stats[0])
 
-	assert.Equal(*stats[1], SwapDevice{
+	assert.Equal(t, SwapDevice{
 		Name:      "/swapfile",
 		UsedBytes: 1024,
 		FreeBytes: 1024,
-	})
+	}, *stats[1])
 }
 
 func TestParseSwapsFile_InvalidFile(t *testing.T) {
@@ -174,5 +216,19 @@ func TestParseSwapsFile_InvalidFile(t *testing.T) {
 
 func TestParseSwapsFile_EmptyFile(t *testing.T) {
 	_, err := parseSwapsFile(context.Background(), strings.NewReader(""))
+	assert.Error(t, err)
+}
+
+// A data row with too few columns must return an error, not panic.
+func TestParseSwapsFile_ShortDataRow(t *testing.T) {
+	shortRow := "Filename\tType\tSize\tUsed\tPriority\n/dev/dm-2\tpartition\t1024\n"
+	_, err := parseSwapsFile(context.Background(), strings.NewReader(shortRow))
+	assert.Error(t, err)
+}
+
+// A header row with too few columns must return an error, not panic.
+func TestParseSwapsFile_ShortHeader(t *testing.T) {
+	shortHeader := "Filename\tType\tSize\n"
+	_, err := parseSwapsFile(context.Background(), strings.NewReader(shortHeader))
 	assert.Error(t, err)
 }

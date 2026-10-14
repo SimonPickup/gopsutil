@@ -1,8 +1,9 @@
+name: Release
+
 on:
   schedule:
-    - cron:  '0 1 1 * *'  # UTC 01:00 on the first day of the Month
+    - cron: '0 1 1 * *'  # UTC 01:00 on the first day of the Month
 
-name: Release
 permissions:
   contents: write
 
@@ -10,6 +11,6 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Release
         run: make release

@@ -3,6 +3,7 @@ package process
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,12 +29,6 @@ import (
 
 var mu sync.Mutex
 
-func skipIfNotImplementedErr(t *testing.T, err error) {
-	if errors.Is(err, common.ErrNotImplementedError) {
-		t.Skip("not implemented")
-	}
-}
-
 func testGetProcess() Process {
 	checkPid := os.Getpid() // process.test
 	ret, _ := NewProcess(int32(checkPid))
@@ -41,42 +37,36 @@ func testGetProcess() Process {
 
 func TestPids(t *testing.T) {
 	ret, err := Pids()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if len(ret) == 0 {
-		t.Errorf("could not get pids %v", ret)
-	}
+	require.NoError(t, err)
+	assert.NotEmptyf(t, ret, "could not get pids %v", ret)
 }
 
 func TestPid_exists(t *testing.T) {
 	checkPid := os.Getpid()
 
 	ret, err := PidExists(int32(checkPid))
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoError(t, err)
 
-	if ret == false {
-		t.Errorf("could not get process exists: %v", ret)
-	}
+	assert.Truef(t, ret, "could not get process exists: %v", ret)
 }
 
 func TestNewProcess(t *testing.T) {
 	checkPid := os.Getpid()
 
 	ret, err := NewProcess(int32(checkPid))
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoError(t, err)
 	empty := &Process{}
 	if runtime.GOOS != "windows" { // Windows pid is 0
-		if empty == ret {
-			t.Errorf("error %v", ret)
-		}
+		assert.NotSamef(t, empty, ret, "error %v", ret)
 	}
 }
 
@@ -84,46 +74,40 @@ func TestMemoryMaps(t *testing.T) {
 	checkPid := os.Getpid()
 
 	ret, err := NewProcess(int32(checkPid))
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoError(t, err)
 
 	// ungrouped memory maps
 	mmaps, err := ret.MemoryMaps(false)
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("memory map get error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "memory map get error %v", err)
 	empty := MemoryMapsStat{}
 	for _, m := range *mmaps {
-		if m == empty {
-			t.Errorf("memory map get error %v", m)
-		}
+		assert.NotEqualf(t, m, empty, "memory map get error %v", m)
 	}
 
 	// grouped memory maps
 	mmaps, err = ret.MemoryMaps(true)
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("memory map get error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if len(*mmaps) != 1 {
-		t.Errorf("grouped memory maps length (%v) is not equal to 1", len(*mmaps))
-	}
-	if (*mmaps)[0] == empty {
-		t.Errorf("memory map is empty")
-	}
+	require.NoErrorf(t, err, "memory map get error %v", err)
+	assert.Lenf(t, *mmaps, 1, "grouped memory maps length (%v) is not equal to 1", len(*mmaps))
+	assert.NotEqualf(t, (*mmaps)[0], empty, "memory map is empty")
 }
 
 func TestMemoryInfo(t *testing.T) {
 	p := testGetProcess()
 
 	v, err := p.MemoryInfo()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting memory info error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting memory info error %v", err)
 	empty := MemoryInfoStat{}
 	if v == nil || *v == empty {
 		t.Errorf("could not get memory info %v", v)
@@ -134,56 +118,46 @@ func TestCmdLine(t *testing.T) {
 	p := testGetProcess()
 
 	v, err := p.Cmdline()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting cmdline error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if !strings.Contains(v, "process.test") {
-		t.Errorf("invalid cmd line %v", v)
-	}
+	require.NoErrorf(t, err, "getting cmdline error %v", err)
+	assert.Containsf(t, v, "process.test", "invalid cmd line %v", v)
 }
 
 func TestCmdLineSlice(t *testing.T) {
 	p := testGetProcess()
 
 	v, err := p.CmdlineSlice()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("getting cmdline slice error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if !reflect.DeepEqual(v, os.Args) {
-		t.Errorf("returned cmdline slice not as expected:\nexp: %v\ngot: %v", os.Args, v)
-	}
+	require.NoErrorf(t, err, "getting cmdline slice error %v", err)
+	assert.Truef(t, reflect.DeepEqual(v, os.Args), "returned cmdline slice not as expected:\nexp: %v\ngot: %v", os.Args, v)
 }
 
 func TestPpid(t *testing.T) {
 	p := testGetProcess()
 
 	v, err := p.Ppid()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting ppid error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if v == 0 {
-		t.Errorf("return value is 0 %v", v)
-	}
+	require.NoErrorf(t, err, "getting ppid error %v", err)
+	assert.NotZerof(t, v, "return value is 0 %v", v)
 	expected := os.Getppid()
-	if v != int32(expected) {
-		t.Errorf("return value is %v, expected %v", v, expected)
-	}
+	assert.Equalf(t, int32(expected), v, "return value is %v, expected %v", v, expected)
 }
 
 func TestStatus(t *testing.T) {
 	p := testGetProcess()
 
 	v, err := p.Status()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting status error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if len(v) == 0 {
-		t.Errorf("could not get state")
-	}
+	require.NoErrorf(t, err, "getting status error %v", err)
+	assert.NotEmptyf(t, v, "could not get state")
 	if v[0] != Running && v[0] != Sleep {
 		t.Errorf("got wrong state, %v", v)
 	}
@@ -193,36 +167,32 @@ func TestTerminal(t *testing.T) {
 	p := testGetProcess()
 
 	_, err := p.Terminal()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting terminal error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	assert.NoErrorf(t, err, "getting terminal error %v", err)
 }
 
 func TestIOCounters(t *testing.T) {
 	p := testGetProcess()
 
 	v, err := p.IOCounters()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting iocounter error %v", err)
-		return
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting iocounter error %v", err)
 	empty := &IOCountersStat{}
-	if v == empty {
-		t.Errorf("error %v", v)
-	}
+	assert.NotSamef(t, v, empty, "error %v", v)
 }
 
 func TestNumCtx(t *testing.T) {
 	p := testGetProcess()
 
 	_, err := p.NumCtxSwitches()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting numctx error %v", err)
-		return
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	assert.NoErrorf(t, err, "getting numctx error %v", err)
 }
 
 func TestNice(t *testing.T) {
@@ -234,10 +204,10 @@ func TestNice(t *testing.T) {
 	}
 
 	n, err := p.Nice()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting nice error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting nice error %v", err)
 	if runtime.GOOS != "windows" && n != 0 && n != 20 && n != 8 {
 		t.Errorf("invalid nice: %d", n)
 	}
@@ -247,15 +217,12 @@ func TestGroups(t *testing.T) {
 	p := testGetProcess()
 
 	v, err := p.Groups()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting groups error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting groups error %v", err)
 	if len(v) == 0 {
 		t.Skip("Groups is empty")
-	}
-	if v[0] < 0 {
-		t.Errorf("invalid Groups: %v", v)
 	}
 }
 
@@ -263,141 +230,117 @@ func TestNumThread(t *testing.T) {
 	p := testGetProcess()
 
 	n, err := p.NumThreads()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting NumThread error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if n < 0 {
-		t.Errorf("invalid NumThread: %d", n)
-	}
+	require.NoErrorf(t, err, "getting NumThread error %v", err)
+	assert.GreaterOrEqualf(t, n, int32(0), "invalid NumThread: %d", n)
 }
 
 func TestThreads(t *testing.T) {
 	p := testGetProcess()
 
 	n, err := p.NumThreads()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting NumThread error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if n < 0 {
-		t.Errorf("invalid NumThread: %d", n)
-	}
+	require.NoErrorf(t, err, "getting NumThread error %v", err)
+	assert.GreaterOrEqualf(t, n, int32(0), "invalid NumThread: %d", n)
 
 	ts, err := p.Threads()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting Threads error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if len(ts) != int(n) {
-		t.Errorf("unexpected number of threads: %v vs %v", len(ts), n)
-	}
+	require.NoErrorf(t, err, "getting Threads error %v", err)
+	assert.Equalf(t, len(ts), int(n), "unexpected number of threads: %v vs %v", len(ts), n)
 }
 
 func TestName(t *testing.T) {
 	p := testGetProcess()
 
 	n, err := p.Name()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting name error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if !strings.Contains(n, "process.test") {
-		t.Errorf("invalid Name %s", n)
-	}
+	require.NoErrorf(t, err, "getting name error %v", err)
+	assert.Containsf(t, n, "process.test", "invalid Name %s", n)
 }
 
 // #nosec G204
 func TestLong_Name_With_Spaces(t *testing.T) {
 	tmpdir, err := os.MkdirTemp("", "")
-	if err != nil {
-		t.Fatalf("unable to create temp dir %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp dir %v", err)
 	defer os.RemoveAll(tmpdir) // clean up
 	tmpfilepath := filepath.Join(tmpdir, "loooong name with spaces.go")
 	tmpfile, err := os.Create(tmpfilepath)
-	if err != nil {
-		t.Fatalf("unable to create temp file %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp file %v", err)
 
 	tmpfilecontent := []byte("package main\nimport(\n\"time\"\n)\nfunc main(){\nfor range time.Tick(time.Second) {}\n}")
 	if _, err := tmpfile.Write(tmpfilecontent); err != nil {
 		tmpfile.Close()
 		t.Fatalf("unable to write temp file %v", err)
 	}
-	if err := tmpfile.Close(); err != nil {
-		t.Fatalf("unable to close temp file %v", err)
-	}
+	require.NoErrorf(t, tmpfile.Close(), "unable to close temp file")
+	ctx := context.Background()
 
-	err = exec.Command("go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
-	if err != nil {
-		t.Fatalf("unable to build temp file %v", err)
-	}
+	err = exec.CommandContext(ctx, "go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
+	require.NoErrorf(t, err, "unable to build temp file %v", err)
 
-	cmd := exec.Command(tmpfile.Name() + ".exe")
-
-	assert.Nil(t, cmd.Start())
+	cmd := exec.CommandContext(ctx, tmpfile.Name()+".exe")
+	require.NoError(t, cmd.Start())
 	time.Sleep(100 * time.Millisecond)
 	p, err := NewProcess(int32(cmd.Process.Pid))
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 
 	n, err := p.Name()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("getting name error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting name error %v", err)
 	basename := filepath.Base(tmpfile.Name() + ".exe")
-	if basename != n {
-		t.Fatalf("%s != %s", basename, n)
-	}
+	require.Equalf(t, basename, n, "%s != %s", basename, n)
 	cmd.Process.Kill()
 }
 
 // #nosec G204
 func TestLong_Name(t *testing.T) {
 	tmpdir, err := os.MkdirTemp("", "")
-	if err != nil {
-		t.Fatalf("unable to create temp dir %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp dir %v", err)
 	defer os.RemoveAll(tmpdir) // clean up
 	tmpfilepath := filepath.Join(tmpdir, "looooooooooooooooooooong.go")
 	tmpfile, err := os.Create(tmpfilepath)
-	if err != nil {
-		t.Fatalf("unable to create temp file %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp file %v", err)
 
 	tmpfilecontent := []byte("package main\nimport(\n\"time\"\n)\nfunc main(){\nfor range time.Tick(time.Second) {}\n}")
 	if _, err := tmpfile.Write(tmpfilecontent); err != nil {
 		tmpfile.Close()
 		t.Fatalf("unable to write temp file %v", err)
 	}
-	if err := tmpfile.Close(); err != nil {
-		t.Fatalf("unable to close temp file %v", err)
-	}
+	require.NoErrorf(t, tmpfile.Close(), "unable to close temp file")
+	ctx := context.Background()
 
-	err = exec.Command("go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
-	if err != nil {
-		t.Fatalf("unable to build temp file %v", err)
-	}
+	err = exec.CommandContext(ctx, "go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
+	require.NoErrorf(t, err, "unable to build temp file %v", err)
 
-	cmd := exec.Command(tmpfile.Name() + ".exe")
-
-	assert.Nil(t, cmd.Start())
+	cmd := exec.CommandContext(ctx, tmpfile.Name()+".exe")
+	require.NoError(t, cmd.Start())
 	time.Sleep(100 * time.Millisecond)
 	p, err := NewProcess(int32(cmd.Process.Pid))
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 
 	n, err := p.Name()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("getting name error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting name error %v", err)
 	basename := filepath.Base(tmpfile.Name() + ".exe")
-	if basename != n {
-		t.Fatalf("%s != %s", basename, n)
-	}
+	require.Equalf(t, basename, n, "%s != %s", basename, n)
 	cmd.Process.Kill()
 }
 
@@ -409,32 +352,25 @@ func TestName_Against_Python(t *testing.T) {
 	if err != nil {
 		t.Skipf("python3 not found: %s", err)
 	}
-	if out, err := exec.Command(py3Path, "-c", "import psutil").CombinedOutput(); err != nil {
+	ctx := context.Background()
+	if out, err := exec.CommandContext(ctx, py3Path, "-c", "import psutil").CombinedOutput(); err != nil {
 		t.Skipf("psutil not found for %s: %s", py3Path, out)
 	}
 
 	tmpdir, err := os.MkdirTemp("", "")
-	if err != nil {
-		t.Fatalf("unable to create temp dir %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp dir %v", err)
 	defer os.RemoveAll(tmpdir) // clean up
 	tmpfilepath := filepath.Join(tmpdir, "looooooooooooooooooooong.py")
 	tmpfile, err := os.Create(tmpfilepath)
-	if err != nil {
-		t.Fatalf("unable to create temp file %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp file %v", err)
 	tmpfilecontent := []byte("#!" + py3Path + "\nimport psutil, time\nprint(psutil.Process().name(), flush=True)\nwhile True:\n\ttime.sleep(1)")
 	if _, err := tmpfile.Write(tmpfilecontent); err != nil {
 		tmpfile.Close()
 		t.Fatalf("unable to write temp file %v", err)
 	}
-	if err := tmpfile.Chmod(0o744); err != nil {
-		t.Fatalf("unable to chmod u+x temp file %v", err)
-	}
-	if err := tmpfile.Close(); err != nil {
-		t.Fatalf("unable to close temp file %v", err)
-	}
-	cmd := exec.Command(tmpfilepath)
+	require.NoErrorf(t, tmpfile.Chmod(0o744), "unable to chmod u+x temp file")
+	require.NoErrorf(t, tmpfile.Close(), "unable to close temp file")
+	cmd := exec.CommandContext(ctx, tmpfilepath)
 	outPipe, _ := cmd.StdoutPipe()
 	scanner := bufio.NewScanner(outPipe)
 	cmd.Start()
@@ -443,52 +379,44 @@ func TestName_Against_Python(t *testing.T) {
 	pyName := scanner.Text() // first line printed by py3 script, its name
 	t.Logf("pyName %s", pyName)
 	p, err := NewProcess(int32(cmd.Process.Pid))
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("getting process error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting process error %v", err)
 	name, err := p.Name()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("getting name error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if pyName != name {
-		t.Fatalf("psutil and gopsutil process.Name() results differ: expected %s, got %s", pyName, name)
-	}
+	require.NoErrorf(t, err, "getting name error %v", err)
+	require.Equalf(t, pyName, name, "psutil and gopsutil process.Name() results differ: expected %s, got %s", pyName, name)
 }
 
 func TestExe(t *testing.T) {
 	p := testGetProcess()
 
 	n, err := p.Exe()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting Exe error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if !strings.Contains(n, "process.test") {
-		t.Errorf("invalid Exe %s", n)
-	}
+	require.NoErrorf(t, err, "getting Exe error %v", err)
+	assert.Containsf(t, n, "process.test", "invalid Exe %s", n)
 }
 
 func TestCpuPercent(t *testing.T) {
 	p := testGetProcess()
 	_, err := p.Percent(0)
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoError(t, err)
 	duration := time.Duration(1000) * time.Microsecond
 	time.Sleep(duration)
 	percent, err := p.Percent(0)
-	if err != nil {
-		t.Errorf("error %v", err)
-	}
+	require.NoError(t, err)
 
 	numcpu := runtime.NumCPU()
 	//	if percent < 0.0 || percent > 100.0*float64(numcpu) { // TODO
-	if percent < 0.0 {
-		t.Fatalf("CPUPercent value is invalid: %f, %d", percent, numcpu)
-	}
+	require.GreaterOrEqualf(t, percent, 0.0, "CPUPercent value is invalid: %f, %d", percent, numcpu)
 }
 
 func TestCpuPercentLoop(t *testing.T) {
@@ -498,14 +426,12 @@ func TestCpuPercentLoop(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		duration := time.Duration(100) * time.Microsecond
 		percent, err := p.Percent(duration)
-		skipIfNotImplementedErr(t, err)
-		if err != nil {
-			t.Errorf("error %v", err)
+		if errors.Is(err, common.ErrNotImplementedError) {
+			t.Skip("not implemented")
 		}
+		require.NoError(t, err)
 		//	if percent < 0.0 || percent > 100.0*float64(numcpu) { // TODO
-		if percent < 0.0 {
-			t.Fatalf("CPUPercent value is invalid: %f, %d", percent, numcpu)
-		}
+		require.GreaterOrEqualf(t, percent, 0.0, "CPUPercent value is invalid: %f, %d", percent, numcpu)
 	}
 }
 
@@ -517,58 +443,45 @@ func TestCreateTime(t *testing.T) {
 	p := testGetProcess()
 
 	c, err := p.CreateTime()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoError(t, err)
 
-	if c < 1420000000 {
-		t.Errorf("process created time is wrong.")
-	}
+	assert.GreaterOrEqualf(t, c, int64(1420000000), "process created time is wrong.")
 
 	gotElapsed := time.Since(time.Unix(int64(c/1000), 0))
 	maxElapsed := time.Duration(20 * time.Second)
 
-	if gotElapsed >= maxElapsed {
-		t.Errorf("this process has not been running for %v", gotElapsed)
-	}
+	assert.Lessf(t, gotElapsed, maxElapsed, "this process has not been running for %v", gotElapsed)
 }
 
 func TestParent(t *testing.T) {
 	p := testGetProcess()
 
 	c, err := p.Parent()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if c == nil {
-		t.Fatalf("could not get parent")
-	}
-	if c.Pid == 0 {
-		t.Fatalf("wrong parent pid")
-	}
+	require.NoError(t, err)
+	require.NotNilf(t, c, "could not get parent")
+	require.NotZerof(t, c.Pid, "wrong parent pid")
 }
 
 func TestConnections(t *testing.T) {
 	p := testGetProcess()
+	ctx := context.Background()
 
 	addr, err := net.ResolveTCPAddr("tcp", "localhost:0") // dynamically get a random open port from OS
-	if err != nil {
-		t.Fatalf("unable to resolve localhost: %v", err)
-	}
+	require.NoErrorf(t, err, "unable to resolve localhost: %v", err)
 	l, err := net.ListenTCP(addr.Network(), addr)
-	if err != nil {
-		t.Fatalf("unable to listen on %v: %v", addr, err)
-	}
+	require.NoErrorf(t, err, "unable to listen on %v: %v", addr, err)
 	defer l.Close()
 
 	tcpServerAddr := l.Addr().String()
 	tcpServerAddrIP := strings.Split(tcpServerAddr, ":")[0]
 	tcpServerAddrPort, err := strconv.ParseUint(strings.Split(tcpServerAddr, ":")[1], 10, 32)
-	if err != nil {
-		t.Fatalf("unable to parse tcpServerAddr port: %v", err)
-	}
+	require.NoErrorf(t, err, "unable to parse tcpServerAddr port: %v", err)
 
 	serverEstablished := make(chan struct{})
 	go func() { // TCP listening goroutine
@@ -584,11 +497,9 @@ func TestConnections(t *testing.T) {
 			panic(err)
 		}
 	}()
-
-	conn, err := net.Dial("tcp", tcpServerAddr)
-	if err != nil {
-		t.Fatalf("unable to dial %v: %v", tcpServerAddr, err)
-	}
+	d := &net.Dialer{}
+	conn, err := d.DialContext(ctx, "tcp", tcpServerAddr)
+	require.NoErrorf(t, err, "unable to dial %v: %v", tcpServerAddr, err)
 	defer conn.Close()
 
 	// Rarely the call to net.Dial returns before the server connection is
@@ -596,63 +507,52 @@ func TestConnections(t *testing.T) {
 	<-serverEstablished
 
 	c, err := p.Connections()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if len(c) == 0 {
-		t.Fatal("no connections found")
-	}
+	require.NoError(t, err)
+	require.NotEmptyf(t, c, "no connections found")
 
 	serverConnections := 0
 	for _, connection := range c {
-		if connection.Laddr.IP == tcpServerAddrIP && connection.Laddr.Port == uint32(tcpServerAddrPort) && connection.Raddr.Port != 0 {
-			if connection.Status != "ESTABLISHED" {
-				t.Fatalf("expected server connection to be ESTABLISHED, have %+v", connection)
-			}
+		if connection.Laddr.IP == tcpServerAddrIP && uint64(connection.Laddr.Port) == tcpServerAddrPort && connection.Raddr.Port != 0 {
+			require.Equalf(t, "ESTABLISHED", connection.Status, "expected server connection to be ESTABLISHED, have %+v", connection)
 			serverConnections++
 		}
 	}
 
 	clientConnections := 0
 	for _, connection := range c {
-		if connection.Raddr.IP == tcpServerAddrIP && connection.Raddr.Port == uint32(tcpServerAddrPort) {
-			if connection.Status != "ESTABLISHED" {
-				t.Fatalf("expected client connection to be ESTABLISHED, have %+v", connection)
-			}
+		if connection.Raddr.IP == tcpServerAddrIP && uint64(connection.Raddr.Port) == tcpServerAddrPort {
+			require.Equalf(t, "ESTABLISHED", connection.Status, "expected client connection to be ESTABLISHED, have %+v", connection)
 			clientConnections++
 		}
 	}
-
-	if serverConnections != 1 { // two established connections, one for the server, the other for the client
-		t.Fatalf("expected 1 server connection, have %d.\nDetails: %+v", serverConnections, c)
-	}
-
-	if clientConnections != 1 { // two established connections, one for the server, the other for the client
-		t.Fatalf("expected 1 server connection, have %d.\nDetails: %+v", clientConnections, c)
-	}
+	// two established connections, one for the server, the other for the client
+	require.Equalf(t, 1, serverConnections, "expected 1 server connection, have %d.\nDetails: %+v", serverConnections, c)
+	// two established connections, one for the server, the other for the client
+	require.Equalf(t, 1, clientConnections, "expected 1 server connection, have %d.\nDetails: %+v", clientConnections, c)
 }
 
 func TestChildren(t *testing.T) {
 	p := testGetProcess()
+	ctx := context.Background()
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("ping", "localhost", "-n", "4")
+		cmd = exec.CommandContext(ctx, "ping", "localhost", "-n", "4")
 	} else {
-		cmd = exec.Command("sleep", "3")
+		cmd = exec.CommandContext(ctx, "sleep", "3")
 	}
-	assert.Nil(t, cmd.Start())
+	require.NoError(t, cmd.Start())
 	time.Sleep(100 * time.Millisecond)
 
 	c, err := p.Children()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if len(c) == 0 {
-		t.Fatalf("children is empty")
-	}
+	require.NoError(t, err)
+	require.NotEmptyf(t, c, "children is empty")
 	found := false
 	for _, child := range c {
 		if child.Pid == int32(cmd.Process.Pid) {
@@ -660,9 +560,7 @@ func TestChildren(t *testing.T) {
 			break
 		}
 	}
-	if !found {
-		t.Errorf("could not find child %d", cmd.Process.Pid)
-	}
+	assert.Truef(t, found, "could not find child %d", cmd.Process.Pid)
 }
 
 func TestUsername(t *testing.T) {
@@ -672,7 +570,9 @@ func TestUsername(t *testing.T) {
 
 	process, _ := NewProcess(int32(myPid))
 	pidUsername, err := process.Username()
-	skipIfNotImplementedErr(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
 	assert.Equal(t, myUsername, pidUsername)
 
 	t.Log(pidUsername)
@@ -681,24 +581,28 @@ func TestUsername(t *testing.T) {
 func TestCPUTimes(t *testing.T) {
 	pid := os.Getpid()
 	process, err := NewProcess(int32(pid))
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 
 	spinSeconds := 0.2
 	cpuTimes0, err := process.Times()
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 
 	// Spin for a duration of spinSeconds
 	t0 := time.Now()
 	tGoal := t0.Add(time.Duration(spinSeconds*1000) * time.Millisecond)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	for time.Now().Before(tGoal) {
 		// This block intentionally left blank
 	}
 
 	cpuTimes1, err := process.Times()
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	if cpuTimes0 == nil || cpuTimes1 == nil {
 		t.FailNow()
@@ -706,134 +610,130 @@ func TestCPUTimes(t *testing.T) {
 	measuredElapsed := cpuTimes1.Total() - cpuTimes0.Total()
 	message := fmt.Sprintf("Measured %fs != spun time of %fs\ncpuTimes0=%v\ncpuTimes1=%v",
 		measuredElapsed, spinSeconds, cpuTimes0, cpuTimes1)
-	assert.True(t, measuredElapsed > float64(spinSeconds)/5, message)
-	assert.True(t, measuredElapsed < float64(spinSeconds)*5, message)
+	assert.Greaterf(t, measuredElapsed, float64(spinSeconds)/5, message)
+	assert.Lessf(t, measuredElapsed, float64(spinSeconds)*5, message)
 }
 
 func TestOpenFiles(t *testing.T) {
 	fp, err := os.Open("process_test.go")
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	defer func() {
-		err := fp.Close()
-		assert.Nil(t, err)
+		assert.NoError(t, fp.Close())
 	}()
 
 	pid := os.Getpid()
 	p, err := NewProcess(int32(pid))
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 
 	v, err := p.OpenFiles()
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 	assert.NotEmpty(t, v) // test always open files.
 
 	for _, vv := range v {
-		assert.NotEqual(t, "", vv.Path)
+		assert.NotEmpty(t, vv.Path)
 	}
 }
 
 func TestKill(t *testing.T) {
+	ctx := context.Background()
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("ping", "localhost", "-n", "4")
+		cmd = exec.CommandContext(ctx, "ping", "localhost", "-n", "4")
 	} else {
-		cmd = exec.Command("sleep", "3")
+		cmd = exec.CommandContext(ctx, "sleep", "3")
 	}
-	assert.Nil(t, cmd.Start())
+	require.NoError(t, cmd.Start())
 	time.Sleep(100 * time.Millisecond)
 	p, err := NewProcess(int32(cmd.Process.Pid))
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 	err = p.Kill()
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 	cmd.Wait()
 }
 
 func TestIsRunning(t *testing.T) {
+	ctx := context.Background()
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("ping", "localhost", "-n", "2")
+		cmd = exec.CommandContext(ctx, "ping", "localhost", "-n", "2")
 	} else {
-		cmd = exec.Command("sleep", "1")
+		cmd = exec.CommandContext(ctx, "sleep", "1")
 	}
 	cmd.Start()
 	p, err := NewProcess(int32(cmd.Process.Pid))
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 	running, err := p.IsRunning()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("IsRunning error: %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if !running {
-		t.Fatalf("process should be found running")
-	}
+	require.NoErrorf(t, err, "IsRunning error: %v", err)
+	require.Truef(t, running, "process should be found running")
 	cmd.Wait()
 	running, err = p.IsRunning()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("IsRunning error: %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if running {
-		t.Fatalf("process should NOT be found running")
-	}
+	require.NoErrorf(t, err, "IsRunning error: %v", err)
+	require.Falsef(t, running, "process should NOT be found running")
 }
 
 // #nosec G204
 func TestEnviron(t *testing.T) {
 	tmpdir, err := os.MkdirTemp("", "")
-	if err != nil {
-		t.Fatalf("unable to create temp dir %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp dir %v", err)
 	defer os.RemoveAll(tmpdir) // clean up
 	tmpfilepath := filepath.Join(tmpdir, "test.go")
 	tmpfile, err := os.Create(tmpfilepath)
-	if err != nil {
-		t.Fatalf("unable to create temp file %v", err)
-	}
+	require.NoErrorf(t, err, "unable to create temp file %v", err)
 
 	tmpfilecontent := []byte("package main\nimport(\n\"time\"\n)\nfunc main(){\nfor range time.Tick(time.Second) {}\n}")
 	if _, err := tmpfile.Write(tmpfilecontent); err != nil {
 		tmpfile.Close()
 		t.Fatalf("unable to write temp file %v", err)
 	}
-	if err := tmpfile.Close(); err != nil {
-		t.Fatalf("unable to close temp file %v", err)
-	}
+	require.NoErrorf(t, tmpfile.Close(), "unable to close temp file")
+	ctx := context.Background()
 
-	err = exec.Command("go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
-	if err != nil {
-		t.Fatalf("unable to build temp file %v", err)
-	}
+	err = exec.CommandContext(ctx, "go", "build", "-o", tmpfile.Name()+".exe", tmpfile.Name()).Run()
+	require.NoErrorf(t, err, "unable to build temp file %v", err)
 
-	cmd := exec.Command(tmpfile.Name() + ".exe")
-
+	cmd := exec.CommandContext(ctx, tmpfile.Name()+".exe")
 	cmd.Env = []string{"testkey=envvalue"}
 
-	assert.Nil(t, cmd.Start())
+	require.NoError(t, cmd.Start())
 	defer cmd.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 	p, err := NewProcess(int32(cmd.Process.Pid))
-	skipIfNotImplementedErr(t, err)
-	assert.Nil(t, err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
+	}
+	require.NoError(t, err)
 
 	envs, err := p.Environ()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("getting environ error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting environ error %v", err)
 	var envvarFound bool
-	for _, envvar := range envs {
-		if envvar == "testkey=envvalue" {
-			envvarFound = true
-			break
-		}
+	if slices.Contains(envs, "testkey=envvalue") {
+		envvarFound = true
 	}
-	if !envvarFound {
-		t.Error("environment variable not found")
-	}
+	assert.Truef(t, envvarFound, "environment variable not found")
 }
 
 func TestCwd(t *testing.T) {
@@ -842,14 +742,37 @@ func TestCwd(t *testing.T) {
 
 	process, _ := NewProcess(int32(myPid))
 	pidCwd, err := process.Cwd()
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Fatalf("getting cwd error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoErrorf(t, err, "getting cwd error %v", err)
 	pidCwd = strings.TrimSuffix(pidCwd, string(os.PathSeparator))
 	assert.Equal(t, currentWorkingDirectory, pidCwd)
 
 	t.Log(pidCwd)
+}
+
+func TestConcurrent(t *testing.T) {
+	const goroutines int = 5
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, err := NewProcess(int32(os.Getpid()))
+			if err != nil {
+				t.Errorf("NewProcess failed: %v", err)
+				return
+			}
+
+			_, err = p.Times()
+			if err != nil {
+				t.Errorf("process.Times failed: %v", err)
+				return
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func BenchmarkNewProcess(b *testing.B) {
@@ -877,6 +800,6 @@ func BenchmarkProcesses(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ps, err := Processes()
 		require.NoError(b, err)
-		require.Greater(b, len(ps), 0)
+		require.NotEmpty(b, ps)
 	}
 }

@@ -2,23 +2,25 @@
 package cpu
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/shirou/gopsutil/v4/internal/common"
 )
 
 func TestTimesEmpty(t *testing.T) {
 	t.Setenv("HOST_PROC", "testdata/linux/times_empty")
 	_, err := Times(true)
-	if err != nil {
-		t.Error("Times(true) failed")
-	}
+	require.NoErrorf(t, err, "Times(true) failed")
 	_, err = Times(false)
-	if err != nil {
-		t.Error("Times(false) failed")
-	}
+	assert.NoErrorf(t, err, "Times(false) failed")
 }
 
 func TestParseStatLine_424(t *testing.T) {
@@ -40,7 +42,7 @@ func TestParseStatLine_424(t *testing.T) {
 }
 
 func TestCountsAgainstLscpu(t *testing.T) {
-	cmd := exec.Command("lscpu")
+	cmd := exec.CommandContext(context.Background(), "lscpu")
 	cmd.Env = []string{"LC_ALL=C"}
 	out, err := cmd.Output()
 	if err != nil {
@@ -49,7 +51,7 @@ func TestCountsAgainstLscpu(t *testing.T) {
 		}
 		t.Errorf("error executing lscpu: %v", err)
 	}
-	var threadsPerCore, coresPerSocket, sockets, books, drawers int
+	var threadsPerCore, coresPerSocket, sockets, clusters, books, drawers int
 	books = 1
 	drawers = 1
 	lines := strings.Split(string(out), "\n")
@@ -61,15 +63,20 @@ func TestCountsAgainstLscpu(t *testing.T) {
 		switch fields[0] {
 		case "Thread(s) per core":
 			threadsPerCore, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
-		case "Core(s) per socket":
+		case "Core(s) per socket", "Core(s) per cluster":
 			coresPerSocket, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
 		case "Socket(s)", "Socket(s) per book":
 			sockets, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
+		case "Cluster(s)":
+			clusters, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
 		case "Book(s) per drawer":
 			books, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
 		case "Drawer(s)":
 			drawers, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
 		}
+	}
+	if sockets == 0 {
+		sockets = clusters
 	}
 	if threadsPerCore == 0 || coresPerSocket == 0 || sockets == 0 {
 		t.Errorf("missing info from lscpu: threadsPerCore=%d coresPerSocket=%d sockets=%d", threadsPerCore, coresPerSocket, sockets)
@@ -77,32 +84,35 @@ func TestCountsAgainstLscpu(t *testing.T) {
 	expectedPhysical := coresPerSocket * sockets * books * drawers
 	expectedLogical := expectedPhysical * threadsPerCore
 	physical, err := Counts(false)
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
+	require.NoError(t, err)
 	logical, err := Counts(true)
-	skipIfNotImplementedErr(t, err)
-	if err != nil {
-		t.Errorf("error %v", err)
+	if errors.Is(err, common.ErrNotImplementedError) {
+		t.Skip("not implemented")
 	}
-	if expectedPhysical != physical {
-		t.Errorf("expected %v, got %v", expectedPhysical, physical)
-	}
-	if expectedLogical != logical {
-		t.Errorf("expected %v, got %v", expectedLogical, logical)
-	}
+	require.NoError(t, err)
+	assert.Equalf(t, expectedPhysical, physical, "expected %v, got %v", expectedPhysical, physical)
+	assert.Equalf(t, expectedLogical, logical, "expected %v, got %v", expectedLogical, logical)
 }
 
 func TestCountsLogicalAndroid_1037(t *testing.T) { // https://github.com/shirou/gopsutil/issues/1037
 	t.Setenv("HOST_PROC", "testdata/linux/1037/proc")
 
 	count, err := Counts(true)
-	if err != nil {
-		t.Errorf("error %v", err)
-	}
+	require.NoError(t, err)
 	expected := 8
-	if count != expected {
-		t.Errorf("expected %v, got %v", expected, count)
-	}
+	assert.Equalf(t, expected, count, "expected %v, got %v", expected, count)
+}
+
+func TestCPUInfoModelNameWithColon_1958(t *testing.T) { // https://github.com/shirou/gopsutil/issues/1958
+	t.Setenv("HOST_PROC", "testdata/linux/1958/proc")
+
+	info, err := Info()
+	require.NoError(t, err)
+	require.Len(t, info, 1)
+
+	expected := "Hygon C86-4G (OPN:5435)"
+	assert.Equalf(t, expected, info[0].ModelName, "expected %v, got %v", expected, info[0].ModelName)
 }
