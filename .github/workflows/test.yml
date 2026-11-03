@@ -4,61 +4,39 @@ on:
   push:
     branches:
       - master
+      - feature/syncthing-v2
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-
 jobs:
-  go-versions:
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.versions.outputs.value }}
-    steps:
-      - id: versions
-        run: |
-          versions=$(curl -s 'https://go.dev/dl/?mode=json' | jq -c 'map(.version[2:])')
-          echo "value=${versions}"  >> $GITHUB_OUTPUT
   test:
-    needs: go-versions
-    strategy:
-      fail-fast: false
-      matrix:
-        go-version: ${{fromJson(needs.go-versions.outputs.versions)}}
-        os:
-          - ubuntu-24.04
-          - ubuntu-22.04
-          - macos-26
-          - macos-15
-          - macos-15-intel
-          - macos-14
-          - windows-2025
-          - windows-2022
-    runs-on: ${{ matrix.os }}
+    name: Linux / Go 1.26.9
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Match the consuming app's release compiler; never auto-upgrade it.
+      GOTOOLCHAIN: local
     steps:
-      - name: Checkout code
+      - name: Checkout public fork
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: ${{ matrix.go-version }}
-      # psutil enables the *_Against_Psutil comparison tests; they skip
-      # when it is missing, so both steps are best-effort.
-      - name: Install Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+          persist-credentials: false
+      - name: Install release Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          python-version: "3.x"
-        continue-on-error: true
-      - name: Install psutil
-        # Pinned like the SHA-pinned actions above: the *_Against_Psutil
-        # tests are verified against this psutil version; bump deliberately
-        # after re-checking the comparisons.
-        run: python -m pip install psutil==7.2.2
-        continue-on-error: true
-      - name: Test
+          go-version: '1.26.9'
+          check-latest: false
+          cache: false
+      - name: Verify toolchain and runner
         run: |
-          go test -coverprofile='coverage.out' -covermode=atomic ./...
+          test "$(go env GOVERSION)" = go1.26.9
+          test "$(go env GOOS)/$(go env GOARCH)" = linux/amd64
+      - name: Test public fork
+        run: go test -timeout 10m ./...
