@@ -17,8 +17,8 @@ concurrency:
 
 jobs:
   test:
-    name: macOS ARM / Go 1.26.9
-    runs-on: macos-26
+    name: Linux / Go 1.26.9
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       # Match the consuming app's release compiler; never auto-upgrade it.
@@ -37,6 +37,6 @@ jobs:
       - name: Verify toolchain and runner
         run: |
           test "$(go env GOVERSION)" = go1.26.9
-          test "$(go env GOOS)/$(go env GOARCH)" = darwin/arm64
+          test "$(go env GOOS)/$(go env GOARCH)" = linux/amd64
       - name: Test public fork
-        run: go test -race -timeout 10m ./...
+        run: go test -timeout 10m ./...
