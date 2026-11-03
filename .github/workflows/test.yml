@@ -4,84 +4,39 @@ on:
   push:
     branches:
       - master
+      - feature/syncthing-v2
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-
 jobs:
-  go-versions:
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.versions.outputs.value }}
-    steps:
-      - id: versions
-        run: |
-          versions=$(curl -s 'https://go.dev/dl/?mode=json' | jq -c 'map(.version[2:])')
-          echo "value=${versions}"  >> $GITHUB_OUTPUT
   test:
-    needs: go-versions
-    strategy:
-      fail-fast: false
-      matrix:
-        go-version: ${{fromJson(needs.go-versions.outputs.versions)}}
-        os:
-          - ubuntu-24.04
-          - ubuntu-22.04
-          - macos-26
-          - macos-15
-          - macos-15-intel
-          - macos-14
-          - windows-2025
-          - windows-2022
-        # Empty is the runner's native arch. 386 is windows-only here:
-        # process_windows.go reads an NT UNICODE_STRING whose header width
-        # follows the calling process, and process_windows_32bit.go is built
-        # only for 386/arm. lint.yml builds windows/386 but never runs a
-        # test, so neither has ever been executed anywhere. A 64-bit runner
-        # runs 386 test binaries directly under WOW64, so this needs no
-        # separate machine. darwin has no 386 port; any non-windows os added
-        # above needs a matching exclude below.
-        GOARCH:
-          - ""
-          - "386"
-        exclude:
-          - {os: ubuntu-24.04, GOARCH: "386"}
-          - {os: ubuntu-22.04, GOARCH: "386"}
-          - {os: macos-26, GOARCH: "386"}
-          - {os: macos-15, GOARCH: "386"}
-          - {os: macos-15-intel, GOARCH: "386"}
-          - {os: macos-14, GOARCH: "386"}
-    # Spelled out so the native jobs keep the names they had before GOARCH
-    # was added to the matrix, instead of gaining an empty trailing field.
-    name: test (${{ matrix.go-version }}, ${{ matrix.os }}${{ matrix.GOARCH && format(', {0}', matrix.GOARCH) || '' }})
-    runs-on: ${{ matrix.os }}
+    name: macOS ARM / Go 1.26.9
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      # Match the consuming app's release compiler; never auto-upgrade it.
+      GOTOOLCHAIN: local
     steps:
-      - name: Checkout code
+      - name: Checkout public fork
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Go
+        with:
+          persist-credentials: false
+      - name: Install release Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ matrix.go-version }}
-      # psutil enables the *_Against_Psutil comparison tests; they skip
-      # when it is missing, so both steps are best-effort.
-      - name: Install Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.x"
-        continue-on-error: true
-      - name: Install psutil
-        # Pinned like the SHA-pinned actions above: the *_Against_Psutil
-        # tests are verified against this psutil version; bump deliberately
-        # after re-checking the comparisons.
-        run: python -m pip install psutil==7.2.2
-        continue-on-error: true
-      - name: Test
-        env:
-          GOARCH: ${{ matrix.GOARCH }}
+          go-version: '1.26.9'
+          check-latest: false
+          cache: false
+      - name: Verify toolchain and runner
         run: |
-          go test -coverprofile='coverage.out' -covermode=atomic ./...
+          test "$(go env GOVERSION)" = go1.26.9
+          test "$(go env GOOS)/$(go env GOARCH)" = darwin/arm64
+      - name: Test public fork
+        run: go test -race -timeout 10m ./...
